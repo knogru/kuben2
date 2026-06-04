@@ -41,6 +41,7 @@ export function activate(context: vscode.ExtensionContext) {
   console.log(`[Extension] Configurações de Contexto - AST: ${useASTEngine}, Graph RAG: ${enableGraphRag}`);
   let endpoint = config.get<string>('endpoint', 'http://localhost:11434');
   let model = config.get<string>('model', 'qwen2.5-coder:1.5b-base');
+  let chatModel = config.get<string>('chatModel', 'qwen2.5-coder:1.5b-instruct');
   let maxTokens = config.get<number>('maxTokens', 20);
   let debounceDelay = config.get<number>('debounceDelay', 300);
   let maxContextLines = config.get<number>('maxContextLines', 30);
@@ -58,7 +59,7 @@ export function activate(context: vscode.ExtensionContext) {
     'css'
   ]);
 
-  const client = new OllamaClient(endpoint, model);
+  const client = new OllamaClient(endpoint, model, chatModel);
   let modelResolver = new ModelResolver(endpoint);
 
   async function updateActiveModelProfile() {
@@ -301,7 +302,13 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (completion && completion.trim()) {
               AcceptanceTracker.getInstance().registerShown(completion, document, position);
-              return [new vscode.InlineCompletionItem(completion)];
+              const item = new vscode.InlineCompletionItem(completion);
+              item.command = {
+                command: 'ai-autocomplete-vscode.onAccept',
+                title: 'On Completion Accepted',
+                arguments: [document.uri, position, completion]
+              };
+              return [item];
             }
           } catch (err) {
             console.error('Erro na geração de autocomplete inline:', err);
@@ -337,6 +344,129 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(summary + statsSummary, { modal: true });
   });
   context.subscriptions.push(latencyCommand);
+
+  // Registrar comando ao aceitar sugestão (auto-healing)
+  const onAcceptCommand = vscode.commands.registerCommand('ai-autocomplete-vscode.onAccept', async (uri: vscode.Uri, position: vscode.Position, completionText: string) => {
+    console.log(`[Extension] Sugestão aceita. Iniciando processamento em ${uri.fsPath}`);
+    
+    const acceptConfig = vscode.workspace.getConfiguration('aiAutocomplete');
+    const formatOnAccept = acceptConfig.get<boolean>('formatOnAccept', true);
+    const correctErrorsOnAccept = acceptConfig.get<boolean>('correctErrorsOnAccept', true);
+    const rangeLines = acceptConfig.get<number>('autoCorrectionLinesRange', 5);
+
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      
+      // Esperar breve momento para o VS Code atualizar o documento com o texto aceito
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      const completionLinesCount = completionText.split('\n').length;
+      const startLine = Math.max(0, position.line - rangeLines);
+      const endLine = Math.min(document.lineCount - 1, position.line + completionLinesCount + rangeLines);
+      
+      const affectedRange = new vscode.Range(
+        startLine, 0,
+        endLine, document.lineAt(endLine).text.length
+      );
+
+      // 1. Executar Formatação (se ativada)
+      if (formatOnAccept) {
+        console.log(`[Extension] Formatando range: linhas ${startLine + 1} a ${endLine + 1}`);
+        const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+          'vscode.executeFormatRangeProvider',
+          uri,
+          affectedRange,
+          {
+            tabSize: vscode.window.activeTextEditor?.options.tabSize || 4,
+            insertSpaces: vscode.window.activeTextEditor?.options.insertSpaces || true
+          }
+        );
+        if (edits && edits.length > 0) {
+          const workspaceEdit = new vscode.WorkspaceEdit();
+          workspaceEdit.set(uri, edits);
+          await vscode.workspace.applyEdit(workspaceEdit);
+        }
+      }
+
+      // 2. Executar Correção Automática (se ativada)
+      if (correctErrorsOnAccept) {
+        // Aguardar o editor de diagnósticos atualizar os problemas
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        const diagnostics = vscode.languages.getDiagnostics(uri);
+        const rangeErrors = diagnostics.filter(d => {
+          const isError = d.severity === vscode.DiagnosticSeverity.Error;
+          const overlaps = d.range.intersection(affectedRange) !== undefined;
+          return isError && overlaps;
+        });
+
+        if (rangeErrors.length > 0) {
+          console.log(`[Extension] Erros sintáticos/compilação detectados: ${rangeErrors.length}. Chamando auto-correção...`);
+          
+          updateStatusBar(enabled, 'generating');
+          statusBarItem.text = '$(sync~spin) Kuben (Corrigindo Código...)';
+          statusBarItem.tooltip = 'Kuben Autocomplete: Corrigindo erros sintáticos no bloco circundante...';
+
+          const codeBlock = document.getText(affectedRange);
+          const diagMessages = rangeErrors.map(e => `- Linha ${e.range.start.line + 1}: ${e.message}`).join('\n');
+
+          const prompt = `Você é um motor de auto-correção sintática e linting inteligente. O usuário aceitou um autocomplete de IA que introduziu pequenos desalinhamentos ou erros de digitação nas linhas circundantes.
+Analise o seguinte bloco de código da linguagem de programação "${document.languageId}":
+
+\`\`\`${document.languageId}
+${codeBlock}
+\`\`\`
+
+Diagnósticos de erro relatados pelo VS Code nas linhas afetadas:
+${diagMessages}
+
+Sua tarefa:
+Corrija APENAS os problemas/erros apontados nos diagnósticos acima, garantindo que o código fique syntactically correto e bem estruturado.
+NÃO altere a lógica de negócios nem a funcionalidade principal do código.
+Retorne estritamente o código corrigido na íntegra para substituir todo o bloco analisado.
+NÃO use markdown fences (\`\`\`), NÃO inclua prosa explicativa, comentários extras ou introduções. Retorne exclusivamente o código corrigido bruto.`;
+
+          const corrected = await client.generateInstruction(prompt);
+
+          if (corrected && corrected.trim() && corrected !== codeBlock) {
+            let isValid = true;
+            if (useASTEngine) {
+              const tree = ASTManager.getInstance().parse(document.languageId, corrected);
+              if (tree) {
+                const hasErrorNode = (node: any): boolean => {
+                  if (node.type === 'ERROR' || node.isMissing()) return true;
+                  for (let i = 0; i < node.childCount; i++) {
+                    if (hasErrorNode(node.child(i))) return true;
+                  }
+                  return false;
+                };
+                if (hasErrorNode(tree.rootNode)) {
+                  console.warn('[Extension] Correção automática descartada devido a erro de parsing AST na resposta.');
+                  isValid = false;
+                }
+              }
+            }
+
+            if (isValid) {
+              const editor = vscode.window.activeTextEditor;
+              if (editor && editor.document.uri.toString() === uri.toString()) {
+                await editor.edit(editBuilder => {
+                  editBuilder.replace(affectedRange, corrected);
+                });
+                console.log('[Extension] Código auto-corrigido com sucesso!');
+                vscode.window.setStatusBarMessage('Kuben: Código auto-corrigido com sucesso!', 3000);
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Extension] Erro no fluxo onAccept:', err);
+    } finally {
+      updateStatusBar(enabled);
+    }
+  });
+  context.subscriptions.push(onAcceptCommand);
 
   // Registrar canal de saída para as respostas de IA
   const kubenOutputChannel = vscode.window.createOutputChannel("Kuben AI Output");
@@ -435,6 +565,7 @@ export function activate(context: vscode.ExtensionContext) {
       enabled = config.get<boolean>('enabled', true);
       endpoint = config.get<string>('endpoint', 'http://localhost:11434');
       model = config.get<string>('model', 'qwen2.5-coder:1.5b-base');
+      chatModel = config.get<string>('chatModel', 'qwen2.5-coder:1.5b-instruct');
       maxTokens = config.get<number>('maxTokens', 20);
       debounceDelay = config.get<number>('debounceDelay', 300);
       maxContextLines = config.get<number>('maxContextLines', 30);
@@ -461,7 +592,7 @@ export function activate(context: vscode.ExtensionContext) {
       ]);
 
       modelResolver = new ModelResolver(endpoint);
-      client.updateConfig(endpoint, model);
+      client.updateConfig(endpoint, model, chatModel);
       updateActiveModelProfile();
       updateStatusBar(enabled);
       registerProvider();

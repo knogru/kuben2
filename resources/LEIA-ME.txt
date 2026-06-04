@@ -1,0 +1,6 @@
+Instruções para o Ícone da Extensão:
+
+1. Renomeie o seu arquivo PNG para "icon.png".
+2. Salve/copie o arquivo "icon.png" diretamente nesta pasta (C:\Users\conta\DEV\kuben2\resources\).
+3. O package.json já está configurado para ler "resources/icon.png" como o ícone oficial da extensão.
+4. Ao compilar ou publicar a extensão, o VS Code exibirá esse ícone na barra lateral e na loja de extensões!

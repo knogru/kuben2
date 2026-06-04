@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <title>Kuben AI Chat</title>
   <style>
     body {
@@ -131,6 +132,13 @@
       color: var(--vscode-button-foreground, #ffffff);
     }
 
+    .shortcut-btn.active {
+      background-color: var(--vscode-button-background, #0e639c);
+      color: var(--vscode-button-foreground, #ffffff);
+      border-color: var(--vscode-focusBorder, #007fd4);
+      font-weight: bold;
+    }
+
     /* Blocos de Código em Markdown */
     pre {
       background-color: rgba(0, 0, 0, 0.25);
@@ -174,23 +182,56 @@
 
   <div id="input-container">
     <div id="shortcuts">
-      <button class="shortcut-btn" onclick="sendShortcut('/explain')">/explain</button>
-      <button class="shortcut-btn" onclick="sendShortcut('/fix')">/fix</button>
-      <button class="shortcut-btn" onclick="sendShortcut('/test')">/test</button>
-      <button class="shortcut-btn" onclick="sendShortcut('/doc')">/doc</button>
+      <button class="shortcut-btn" data-command="/explain">/explain</button>
+      <button class="shortcut-btn" data-command="/fix">/fix</button>
+      <button class="shortcut-btn" data-command="/test">/test</button>
+      <button class="shortcut-btn" data-command="/doc">/doc</button>
     </div>
     <div id="textarea-wrapper">
       <textarea id="prompt" placeholder="Pergunte ao Kuben... (Ctrl+Enter para enviar)"></textarea>
-      <button id="send-btn" onclick="sendMessage()">Enviar</button>
+      <button id="send-btn">Enviar</button>
     </div>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const chatContainer = document.getElementById('chat-container');
     const promptInput = document.getElementById('prompt');
     const sendButton = document.getElementById('send-btn');
     let currentAssistantMessageDiv = null;
+    let currentMode = 'chat'; // 'chat', '/explain', '/fix', '/test', '/doc'
+
+    // Configurar event listeners programaticamente para respeitar a CSP e gerenciar os modos
+    document.querySelectorAll('.shortcut-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cmd = btn.getAttribute('data-command');
+        
+        if (currentMode === cmd) {
+          // Desmarcar o modo atual se clicado novamente e voltar para chat
+          currentMode = 'chat';
+          btn.classList.remove('active');
+          promptInput.placeholder = 'Pergunte ao Kuben... (Ctrl+Enter para enviar)';
+        } else {
+          // Limpar estados ativos anteriores
+          document.querySelectorAll('.shortcut-btn').forEach(b => b.classList.remove('active'));
+          // Ativar novo modo
+          currentMode = cmd;
+          btn.classList.add('active');
+          
+          let placeholderText = 'Pergunte ao Kuben...';
+          if (cmd === '/explain') placeholderText = 'Explicar código ativo... (Digite detalhes ou clique em Enviar)';
+          else if (cmd === '/fix') placeholderText = 'Corrigir erros no código ativo... (Digite detalhes ou clique em Enviar)';
+          else if (cmd === '/test') placeholderText = 'Gerar testes para o código ativo... (Digite detalhes ou clique em Enviar)';
+          else if (cmd === '/doc') placeholderText = 'Documentar código ativo... (Digite detalhes ou clique em Enviar)';
+          
+          promptInput.placeholder = placeholderText;
+        }
+      });
+    });
+
+    sendButton.addEventListener('click', () => {
+      sendMessage();
+    });
 
     // Atalho Ctrl+Enter para enviar
     promptInput.addEventListener('keydown', (e) => {
@@ -200,16 +241,26 @@
       }
     });
 
-    function sendShortcut(command) {
-      vscode.postMessage({ type: 'shortcut', command: command });
-    }
+    // Ouvinte delegado para cliques nos botões de copiar do chat (evita bloqueio da CSP)
+    chatContainer.addEventListener('click', (e) => {
+      if (e.target && e.target.classList.contains('copy-btn')) {
+        const codeId = e.target.getAttribute('data-code-id');
+        if (codeId) {
+          copyToClipboard(codeId, e.target);
+        }
+      }
+    });
 
     function sendMessage() {
       const text = promptInput.value.trim();
-      if (!text) return;
+      
+      // Permitir enviar sem prompt caso estejamos em algum modo de atalho para atuar no código ativo
+      if (!text && currentMode === 'chat') return;
+
+      const displayPrompt = text || `Executar modo ${currentMode} no código do editor`;
 
       // Adicionar mensagem do usuário na tela
-      appendMessage('user', text);
+      appendMessage('user', displayPrompt);
       promptInput.value = '';
       promptInput.disabled = true;
       sendButton.disabled = true;
@@ -217,8 +268,8 @@
       // Criar espaço para a resposta do assistente
       currentAssistantMessageDiv = appendMessage('assistant', 'Pensando...');
 
-      // Notificar extensão
-      vscode.postMessage({ type: 'chat', text: text });
+      // Notificar extensão com o texto e o modo
+      vscode.postMessage({ type: 'chat', text: text, mode: currentMode });
     }
 
     function appendMessage(sender, text) {
@@ -234,6 +285,14 @@
     window.addEventListener('message', event => {
       const message = event.data;
       switch (message.type) {
+        case 'clear':
+          chatContainer.innerHTML = '';
+          currentAssistantMessageDiv = null;
+          // Voltar ao modo chat geral
+          currentMode = 'chat';
+          document.querySelectorAll('.shortcut-btn').forEach(b => b.classList.remove('active'));
+          promptInput.placeholder = 'Pergunte ao Kuben... (Ctrl+Enter para enviar)';
+          break;
         case 'chunk':
           if (currentAssistantMessageDiv) {
             if (currentAssistantMessageDiv.innerHTML === 'Pensando...') {
@@ -263,6 +322,7 @@
 
     // Renderizador Markdown extremamente básico e robusto
     function formatMarkdown(text) {
+      if (!text) return '';
       let html = text
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -271,7 +331,7 @@
       // Renderizar blocos de código: ```lang ... ```
       html = html.replace(/```([\w-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
         const id = 'code-' + Math.random().toString(36).substr(2, 9);
-        return `<pre><button class="copy-btn" onclick="copyToClipboard('${id}')">Copiar</button><code id="${id}">${code.trim()}</code></pre>`;
+        return `<pre><button class="copy-btn" data-code-id="${id}">Copiar</button><code id="${id}">${code.trim()}</code></pre>`;
       });
 
       // Renderizar códigos inline: `code`
@@ -283,12 +343,11 @@
       return html;
     }
 
-    function copyToClipboard(id) {
+    function copyToClipboard(id, btn) {
       const codeEl = document.getElementById(id);
       if (codeEl) {
         const text = codeEl.innerText;
         navigator.clipboard.writeText(text).then(() => {
-          const btn = codeEl.previousSibling;
           btn.innerText = 'Copiado!';
           setTimeout(() => btn.innerText = 'Copiar', 2000);
         });

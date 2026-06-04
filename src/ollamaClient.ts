@@ -8,14 +8,23 @@ export interface GenerateOptions {
   stop?: string[];
 }
 
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
 export class OllamaClient {
   private abortController: AbortController | null = null;
   private activeModel: IResolvedModel | null = null;
+  private chatModel: string = 'qwen2.5-coder:1.5b-instruct';
 
   constructor(
     private endpoint: string = 'http://localhost:11434',
-    private model: string = 'qwen2.5-coder:1.5b-base'
-  ) {}
+    private model: string = 'qwen2.5-coder:1.5b-base',
+    chatModel?: string
+  ) {
+    this.chatModel = chatModel || model;
+  }
 
   setActiveModel(resolved: IResolvedModel) {
     this.activeModel = resolved;
@@ -27,9 +36,10 @@ export class OllamaClient {
   }
 
   // Permite atualizar as configurações dinamicamente quando mudam no editor
-  updateConfig(endpoint: string, model: string) {
+  updateConfig(endpoint: string, model: string, chatModel?: string) {
     this.endpoint = endpoint;
     this.model = model;
+    this.chatModel = chatModel || model;
   }
 
   /**
@@ -243,6 +253,39 @@ export class OllamaClient {
   }
 
   /**
+   * Geração para tarefas de instrução/chat síncronas.
+   */
+  async generateInstruction(prompt: string, systemPrompt?: string): Promise<string | undefined> {
+    try {
+      const url = `${this.endpoint}/api/generate`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          prompt: prompt,
+          system: systemPrompt,
+          stream: false,
+          options: {
+            temperature: 0.1,
+          }
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`Ollama instruction error: ${response.status} - ${response.statusText}`);
+        return undefined;
+      }
+
+      const data = (await response.json()) as { response: string };
+      return data.response;
+    } catch (error) {
+      console.error('[OllamaClient] Instruction generation failed:', error);
+      return undefined;
+    }
+  }
+
+  /**
    * Geração livre de stream de tokens (usado para Chat e Explicações).
    * Retorna um AsyncGenerator que entrega os tokens à medida que chegam.
    */
@@ -342,5 +385,72 @@ export class OllamaClient {
 
     const result = codeLines.join('\n').trimEnd();
     return result || undefined;
+  }
+
+  /**
+   * Geração de stream usando a API de Chat (/api/chat) do Ollama.
+   * Retorna os chunks de resposta à medida que são gerados.
+   */
+  async *generateChatStream(messages: ChatMessage[]): AsyncGenerator<string, void, unknown> {
+    try {
+      const url = `${this.endpoint}/api/chat`;
+      const modelToUse = this.chatModel || this.model;
+      
+      console.log(`[OllamaClient] Calling Chat API at ${url} with model ${modelToUse}`);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: modelToUse,
+          messages: messages,
+          stream: true,
+          options: {
+            temperature: 0.5,
+          }
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama chat stream error: ${response.status} - ${response.statusText}`);
+      }
+
+      const body = response.body;
+      if (!body) {
+        return;
+      }
+
+      const reader = body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+
+          try {
+            const chunk = JSON.parse(trimmed) as { message?: { content?: string }; done?: boolean };
+            if (chunk.message && chunk.message.content) {
+              yield chunk.message.content;
+            }
+          } catch {
+            // Ignorar erros de parse NDJSON parcial
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[OllamaClient] Chat stream failed:', error);
+    }
   }
 }
