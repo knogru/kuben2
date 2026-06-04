@@ -1,0 +1,93 @@
+{
+  "name": "ai-autocomplete-vscode",
+  "displayName": "AI Autocomplete (Local)",
+  "description": "Autocomplete inline com IA local usando Ollama e modelos pequenos (Qwen2.5-Coder/CodeGemma).",
+  "version": "0.1.0",
+  "publisher": "antigravity",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ai-autocomplete-vscode.toggle",
+        "title": "AI Autocomplete: Habilitar/Desabilitar Autocomplete"
+      }
+    ],
+    "configuration": {
+      "title": "AI Autocomplete",
+      "properties": {
+        "aiAutocomplete.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilita ou desabilita o autocomplete de código inline."
+        },
+        "aiAutocomplete.endpoint": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "URL do endpoint do Ollama."
+        },
+        "aiAutocomplete.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:1.5b-base",
+          "description": "Modelo do Ollama para geração de código (ex: qwen2.5-coder:1.5b-base, qwen2.5-coder:3b, codegemma:2b-code)."
+        },
+        "aiAutocomplete.maxTokens": {
+          "type": "integer",
+          "default": 20,
+          "description": "Quantidade máxima de tokens a serem preditos por sugestão."
+        },
+        "aiAutocomplete.debounceDelay": {
+          "type": "integer",
+          "default": 300,
+          "description": "Tempo de espera (debounce) em milissegundos após parar de digitar antes de consultar o Ollama."
+        },
+        "aiAutocomplete.maxContextLines": {
+          "type": "integer",
+          "default": 30,
+          "description": "Número máximo de linhas acima do cursor a serem enviadas como prefixo."
+        },
+        "aiAutocomplete.languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "javascript",
+            "typescript",
+            "javascriptreact",
+            "typescriptreact",
+            "python",
+            "go",
+            "rust",
+            "c",
+            "cpp",
+            "html",
+            "css"
+          ],
+          "description": "Lista de identificadores de linguagens nas quais o autocomplete estará ativo."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.5"
+  }
+}
