@@ -21,6 +21,10 @@
       {
         "command": "ai-autocomplete-vscode.toggle",
         "title": "AI Autocomplete: Habilitar/Desabilitar Autocomplete"
+      },
+      {
+        "command": "ai-autocomplete-vscode.showLatency",
+        "title": "AI Autocomplete: Exibir Telemetria de Latência"
       }
     ],
     "configuration": {
@@ -75,19 +79,36 @@
             "css"
           ],
           "description": "Lista de identificadores de linguagens nas quais o autocomplete estará ativo."
+        },
+        "aiAutocomplete.useASTEngine": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilita o motor de parsing de AST (web-tree-sitter) para análise sintática."
+        },
+        "aiAutocomplete.enableGraphRag": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilita a injeção de contexto estruturado de dependências (Graph RAG leve)."
         }
       }
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "node scripts/setup-parsers.js && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^2.5.2",
+    "mocha": "^11.7.6",
+    "tree-sitter-wasms": "^0.1.13",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.25.3"
   }
 }
