@@ -1,0 +1,134 @@
+import { IModelProfile } from './modelTypes';
+
+export const MODEL_REGISTRY: readonly IModelProfile[] = [
+  {
+    family: 'qwen',
+    sentinels: {
+      prefix: '<|fim_prefix|>',
+      suffix: '<|fim_suffix|>',
+      middle: '<|fim_middle|>',
+      eot: '<|endoftext|>',
+    },
+    capabilities: {
+      supportsFim: true,
+      supportsStreaming: true,
+      maxContextTokens: 32768,
+      recommendedNumPredict: 24,
+      recommendedNumPredictBlock: 128,
+      requiresRaw: true,
+      requiresStop: ['<|endoftext|>', '<|fim_prefix|>', '<|fim_suffix|>', '<|fim_middle|>'],
+    },
+    detectionPatterns: [/qwen.*coder/i, /qwq/i],
+  },
+  {
+    family: 'deepseek',
+    sentinels: {
+      prefix: '<|fim_begin|>',
+      suffix: '<|fim_hole|>',
+      middle: '<|fim_end|>',
+      eot: '<|eos_token|>',
+    },
+    capabilities: {
+      supportsFim: true,
+      supportsStreaming: true,
+      maxContextTokens: 16384,
+      recommendedNumPredict: 24,
+      recommendedNumPredictBlock: 128,
+      requiresRaw: true,
+      requiresStop: ['<|eos_token|>', '<|fim_begin|>', '<|fim_hole|>', '<|fim_end|>'],
+    },
+    detectionPatterns: [/deepseek.*coder/i, /deepseek.*r\d/i, /deepseek/i],
+  },
+  {
+    family: 'codellama',
+    sentinels: {
+      prefix: ' <PRE> ',
+      suffix: ' <SUF>',
+      middle: ' <MID>',
+      eot: ' <EOT>',
+    },
+    capabilities: {
+      supportsFim: true,
+      supportsStreaming: true,
+      maxContextTokens: 4096,
+      recommendedNumPredict: 20,
+      recommendedNumPredictBlock: 96,
+      requiresRaw: true,
+      requiresStop: [' <EOT>', ' <PRE>', ' <SUF>', ' <MID>'],
+    },
+    detectionPatterns: [/codellama.*code/i, /code.*llama/i],
+  },
+  {
+    family: 'starcoder',
+    sentinels: {
+      prefix: '<fim_prefix>',
+      suffix: '<fim_suffix>',
+      middle: '<fim_middle>',
+      eot: '<|endofmask|>',
+    },
+    capabilities: {
+      supportsFim: true,
+      supportsStreaming: true,
+      maxContextTokens: 16384,
+      recommendedNumPredict: 24,
+      recommendedNumPredictBlock: 128,
+      requiresRaw: true,
+      requiresStop: ['<|endofmask|>', '<fim_prefix>', '<fim_suffix>', '<fim_middle>'],
+    },
+    detectionPatterns: [/starcoder/i, /starcode/i],
+  },
+  {
+    family: 'codegemma',
+    sentinels: {
+      prefix: '<|fim_prefix|>',
+      suffix: '<|fim_suffix|>',
+      middle: '<|fim_middle|>',
+      eot: '<|file_separator|>',
+    },
+    capabilities: {
+      supportsFim: true,
+      supportsStreaming: true,
+      maxContextTokens: 8192,
+      recommendedNumPredict: 24,
+      recommendedNumPredictBlock: 96,
+      requiresRaw: true,
+      requiresStop: ['<|file_separator|>', '<|fim_prefix|>', '<|fim_suffix|>', '<|fim_middle|>'],
+    },
+    detectionPatterns: [/codegemma/i, /gemma.*code/i],
+  },
+  {
+    family: 'phi',
+    sentinels: {
+      prefix: '<fim_prefix>',
+      suffix: '<fim_suffix>',
+      middle: '<fim_middle>',
+      eot: '<|endoftext|>',
+    },
+    capabilities: {
+      supportsFim: true,
+      supportsStreaming: true,
+      maxContextTokens: 4096,
+      recommendedNumPredict: 24,
+      recommendedNumPredictBlock: 128,
+      requiresRaw: true,
+      requiresStop: ['<|endoftext|>', '<fim_prefix>', '<fim_suffix>', '<fim_middle>'],
+    },
+    detectionPatterns: [/phi3/i, /phi-3/i, /phi-4/i],
+  },
+  {
+    family: 'chat_only',
+    sentinels: { prefix: '', suffix: '', middle: '', eot: '' },
+    capabilities: {
+      supportsFim: false,
+      supportsStreaming: true,
+      maxContextTokens: 8192,
+      recommendedNumPredict: 64,
+      recommendedNumPredictBlock: 256,
+      requiresRaw: false,
+      requiresStop: [],
+    },
+    detectionPatterns: [/mistral/i, /llama3/i, /llama-3/i, /llama2/i, /gemma/i],
+  },
+] as const;
+
+export const FALLBACK_PROFILE: IModelProfile = MODEL_REGISTRY[0]; // qwen como fallback seguro

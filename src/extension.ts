@@ -6,9 +6,16 @@ import { SymbolIndexer } from './ast/symbolIndexer';
 import { ContextManager } from './ast/contextManager';
 import { InferenceOptimizer } from './ast/inferenceOptimizer';
 import { LatencyTracker } from './telemetry/latencyTracker';
+import { ModelResolver } from './infrastructure/modelResolver';
+import { OpenTabsAgent } from './infrastructure/openTabsAgent';
+import { AcceptanceTracker } from './application/acceptanceTracker';
+import { KubenCodeActionProvider } from './providers/codeActionProvider';
+import { ChatViewProvider } from './providers/chatViewProvider';
 
 let providerDisposable: vscode.Disposable | null = null;
 let statusBarItem: vscode.StatusBarItem;
+let isConnected = false;
+let isCheckingConnection = false;
 
 export function activate(context: vscode.ExtensionContext) {
   // Ler configurações do workspace
@@ -52,6 +59,21 @@ export function activate(context: vscode.ExtensionContext) {
   ]);
 
   const client = new OllamaClient(endpoint, model);
+  let modelResolver = new ModelResolver(endpoint);
+
+  async function updateActiveModelProfile() {
+    try {
+      const modelProfileConfig = config.get<string>('modelProfile', 'auto');
+      const resolved = await modelResolver.resolve(model, modelProfileConfig);
+      client.setActiveModel(resolved);
+      console.log(`[Extension] Perfil do Modelo Resolvido: ${resolved.profile.family} (Source: ${resolved.source})`);
+    } catch (err) {
+      console.error('[Extension] Erro ao resolver perfil do modelo:', err);
+    }
+  }
+
+  // Executar a resolução inicial
+  updateActiveModelProfile();
 
   // Criar item da Barra de Status
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -59,15 +81,56 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(statusBarItem);
   updateStatusBar(enabled);
 
+  async function performHealthCheck() {
+    if (isCheckingConnection) {
+      return;
+    }
+    isCheckingConnection = true;
+    try {
+      const active = await client.checkConnection();
+      const wasConnected = isConnected;
+      isConnected = active;
+      updateStatusBar(enabled);
+
+      if (!isConnected && wasConnected) {
+        vscode.window.showWarningMessage(
+          'Kuben: Não foi possível conectar ao Ollama local.',
+          'Verificar Configurações',
+          'Tentar Novamente'
+        ).then(selection => {
+          if (selection === 'Verificar Configurações') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'aiAutocomplete');
+          } else if (selection === 'Tentar Novamente') {
+            performHealthCheck();
+          }
+        });
+      }
+    } catch (e) {
+      console.error('[HealthCheck] Error checking Ollama connection:', e);
+      isConnected = false;
+      updateStatusBar(enabled);
+    } finally {
+      isCheckingConnection = false;
+    }
+  }
+
+  // Iniciar checagem periódica a cada 20 segundos
+  const healthCheckInterval = setInterval(performHealthCheck, 20000);
+  context.subscriptions.push({
+    dispose: () => clearInterval(healthCheckInterval)
+  });
+
+  // Executar imediatamente na ativação
+  performHealthCheck();
+
   // Helper de debounce que aceita um delay dinâmico
   function createDebounced<T extends any[], R>(
-    fn: (...args: T) => Promise<R>,
-    getDelay: () => number
+    fn: (...args: T) => Promise<R>
   ) {
     let timeout: NodeJS.Timeout | null = null;
     let pendingResolve: ((value: R | undefined) => void) | null = null;
 
-    return (...args: T): Promise<R | undefined> => {
+    return (delay: number, ...args: T): Promise<R | undefined> => {
       if (timeout) {
         clearTimeout(timeout);
         timeout = null;
@@ -90,7 +153,7 @@ export function activate(context: vscode.ExtensionContext) {
             pendingResolve = null;
             timeout = null;
           }
-        }, getDelay());
+        }, delay);
       });
     };
   }
@@ -98,20 +161,29 @@ export function activate(context: vscode.ExtensionContext) {
   // Instanciar a chamada do autocomplete debounced com status bar update
   const debouncedGenerate = createDebounced(
     async (prefix: string, suffix: string, tokens: number, opts?: { temperature: number; repeatPenalty: number }) => {
-      statusBarItem.text = '$(sync~spin) AI: Gerando...';
-      statusBarItem.tooltip = `Consultando modelo ${model} no Ollama`;
+      if (!isConnected) {
+        // Tentar re-conectar se estiver desconectado
+        const active = await client.checkConnection();
+        isConnected = active;
+        if (!isConnected) {
+          updateStatusBar(enabled);
+          return undefined;
+        }
+      }
+      updateStatusBar(enabled, 'generating');
       try {
         const result = await client.generateWithFIM(prefix, suffix, tokens, opts ? {
           maxTokens: tokens,
           temperature: opts.temperature,
           repeatPenalty: opts.repeatPenalty,
         } : undefined);
-        return result;
-      } finally {
         updateStatusBar(enabled);
+        return result;
+      } catch (err) {
+        updateStatusBar(enabled, 'error');
+        return undefined;
       }
-    },
-    () => debounceDelay
+    }
   );
 
   // Registrar / recriar o provedor de autocomplete inline
@@ -131,7 +203,7 @@ export function activate(context: vscode.ExtensionContext) {
     providerDisposable = vscode.languages.registerInlineCompletionItemProvider(
       documentSelectors,
       {
-        async provideInlineCompletionItems(document, position, _context, token) {
+        async provideInlineCompletionItems(document, position, inlineContext, token) {
           if (!enabled) {
             return [];
           }
@@ -155,13 +227,30 @@ export function activate(context: vscode.ExtensionContext) {
             return [];
           }
 
-          // Enriquecer o prefixo com contexto de dependências (Graph RAG Light)
+          // Enriquecer o prefixo com contexto de dependências (Graph RAG Light + Open Tabs Jaccard)
           let enrichedPrefix = prefix;
           const contextStart = Date.now();
           if (enableGraphRag) {
+            // Contexto das dependências
             enrichedPrefix = ContextManager.getInstance().getContextualPrefix(
               document, position, prefix
             );
+
+            // Contexto de abas abertas
+            try {
+              const tabSnippets = OpenTabsAgent.getInstance().getRelevantSnippets(document, prefix, 3);
+              if (tabSnippets.length > 0) {
+                const commentChar = ['python', 'ruby', 'shellscript'].includes(document.languageId) ? '#' : '//';
+                let tabContextComment = `\n${commentChar} Contexto Adicional de Abas Abertas (Jaccard RAG):\n`;
+                for (const snippet of tabSnippets) {
+                  tabContextComment += `${commentChar} Do arquivo aberto "${snippet.filePath}":\n`;
+                  tabContextComment += snippet.content.split('\n').map(l => `${commentChar} ${l}`).join('\n') + '\n';
+                }
+                enrichedPrefix = tabContextComment + enrichedPrefix;
+              }
+            } catch (err) {
+              console.error('[OpenTabsContext] Erro ao buscar snippets de abas abertas:', err);
+            }
           }
           const contextMs = Date.now() - contextStart;
 
@@ -172,16 +261,29 @@ export function activate(context: vscode.ExtensionContext) {
             lineNumber, charPos, maxTokens
           );
 
-          // Pega 5 linhas após a linha atual para servir como sufixo FIM
-          const endLine = Math.min(document.lineCount - 1, lineNumber + 5);
+          // Verificar se precisamos de completação de bloco inteiro (manual Invoke ou AST indicando bloco vazio)
+          const isManualInvoke = inlineContext.triggerKind === vscode.InlineCompletionTriggerKind.Invoke;
+          const isFunctionBlockEmpty = InferenceOptimizer.isBlockEmpty(document.languageId, fullCode, lineNumber, charPos);
+
+          if (isManualInvoke || isFunctionBlockEmpty) {
+            const activeProfile = client.getActiveModel()?.profile;
+            inferenceParams.maxTokens = activeProfile?.capabilities.recommendedNumPredictBlock || 128;
+            inferenceParams.temperature = 0.2;
+          }
+
+          // Pega mais linhas após a linha atual para servir como sufixo FIM se for completação de bloco
+          const suffixLinesCount = (isManualInvoke || isFunctionBlockEmpty) ? 20 : 5;
+          const endLine = Math.min(document.lineCount - 1, lineNumber + suffixLinesCount);
           const suffix = document.getText(
             new vscode.Range(lineNumber, charPos, endLine, 0)
           );
 
           try {
-            // Executa a chamada debounced com parâmetros otimizados
+            // Executa a chamada debounced com parâmetros otimizados e delay dinâmico
+            const delay = isManualInvoke ? 50 : debounceDelay;
             const inferenceStart = Date.now();
             const completion = await debouncedGenerate(
+              delay,
               enrichedPrefix, suffix, inferenceParams.maxTokens,
               inferenceParams
             );
@@ -198,6 +300,7 @@ export function activate(context: vscode.ExtensionContext) {
             });
 
             if (completion && completion.trim()) {
+              AcceptanceTracker.getInstance().registerShown(completion, document, position);
               return [new vscode.InlineCompletionItem(completion)];
             }
           } catch (err) {
@@ -229,9 +332,101 @@ export function activate(context: vscode.ExtensionContext) {
   // Registrar comando de telemetria de latência
   const latencyCommand = vscode.commands.registerCommand('ai-autocomplete-vscode.showLatency', () => {
     const summary = LatencyTracker.getInstance().formatSummary();
-    vscode.window.showInformationMessage(summary, { modal: true });
+    const stats = AcceptanceTracker.getInstance().getSessionStats();
+    const statsSummary = `\n\n📈 Telemetria de Aceitação:\n  Mostrados: ${stats.shown}\n  Aceitos: ${stats.accepted}\n  Taxa de Aceite: ${stats.acceptanceRate}%`;
+    vscode.window.showInformationMessage(summary + statsSummary, { modal: true });
   });
   context.subscriptions.push(latencyCommand);
+
+  // Registrar canal de saída para as respostas de IA
+  const kubenOutputChannel = vscode.window.createOutputChannel("Kuben AI Output");
+  context.subscriptions.push(kubenOutputChannel);
+
+  async function runStreamCommand(prompt: string, title: string) {
+    kubenOutputChannel.show(true);
+    kubenOutputChannel.clear();
+    kubenOutputChannel.appendLine(`Kuben [IA]: ${title}...`);
+    kubenOutputChannel.appendLine(`===============================================\n`);
+
+    try {
+      for await (const chunk of client.generateStream(prompt)) {
+        kubenOutputChannel.append(chunk);
+      }
+      kubenOutputChannel.appendLine(`\n\n===============================================`);
+      kubenOutputChannel.appendLine(`Fim da resposta.`);
+    } catch (err) {
+      kubenOutputChannel.appendLine(`\n[Erro] Falha ao gerar resposta: ${err}`);
+    }
+  }
+
+  // 1. Comando Explicar Seleção
+  const explainCommand = vscode.commands.registerCommand('ai-autocomplete-vscode.explainSelection', async (docArg?: vscode.TextDocument, rangeArg?: vscode.Range) => {
+    const editor = vscode.window.activeTextEditor;
+    const document = docArg || editor?.document;
+    const range = rangeArg || editor?.selection;
+    if (!document || !range || range.isEmpty) {
+      vscode.window.showWarningMessage('Nenhum código selecionado.');
+      return;
+    }
+    const code = document.getText(range);
+    const prompt = `Explique em português o seguinte código e descreva o que ele faz de forma clara e objetiva:\n\n\`\`\`${document.languageId}\n${code}\n\`\`\``;
+    await runStreamCommand(prompt, "Explicando código selecionado");
+  });
+  context.subscriptions.push(explainCommand);
+
+  // 2. Comando Gerar Testes Unitários
+  const generateTestsCommand = vscode.commands.registerCommand('ai-autocomplete-vscode.generateTests', async (docArg?: vscode.TextDocument, rangeArg?: vscode.Range) => {
+    const editor = vscode.window.activeTextEditor;
+    const document = docArg || editor?.document;
+    const range = rangeArg || editor?.selection;
+    if (!document || !range || range.isEmpty) {
+      vscode.window.showWarningMessage('Nenhum código selecionado.');
+      return;
+    }
+    const code = document.getText(range);
+    const prompt = `Gere testes unitários completos e bem estruturados para o seguinte código. Use frameworks apropriados para a linguagem ${document.languageId}:\n\n\`\`\`${document.languageId}\n${code}\n\`\`\``;
+    await runStreamCommand(prompt, "Gerando testes unitários");
+  });
+  context.subscriptions.push(generateTestsCommand);
+
+  // 3. Comando Corrigir Problema
+  const fixDiagnosticCommand = vscode.commands.registerCommand('ai-autocomplete-vscode.fixDiagnostic', async (docArg?: vscode.TextDocument, rangeArg?: vscode.Range, diagnostics?: vscode.Diagnostic[]) => {
+    const editor = vscode.window.activeTextEditor;
+    const document = docArg || editor?.document;
+    const range = rangeArg || editor?.selection;
+    if (!document || !range) {
+      vscode.window.showWarningMessage('Nenhum código selecionado.');
+      return;
+    }
+    const code = range.isEmpty ? document.lineAt(range.start.line).text : document.getText(range);
+    const diags = diagnostics || vscode.languages.getDiagnostics(document.uri).filter(d => d.range.start.line === range.start.line);
+    const diagMessages = diags.map(d => `- ${d.message}`).join('\n');
+    const prompt = `Corrija o seguinte código que apresenta os seguintes problemas:\n${diagMessages}\n\nCódigo original:\n\`\`\`${document.languageId}\n${code}\n\`\`\`\n\nRetorne o código corrigido e explique brevemente a alteração feita.`;
+    await runStreamCommand(prompt, "Corrigindo problema detectado");
+  });
+  context.subscriptions.push(fixDiagnosticCommand);
+
+  // Registrar o Code Action Provider
+  const codeActionProviderDisposable = vscode.languages.registerCodeActionsProvider(
+    { pattern: '**/*' },
+    new KubenCodeActionProvider(),
+    {
+      providedCodeActionKinds: KubenCodeActionProvider.providedCodeActionKinds
+    }
+  );
+  context.subscriptions.push(codeActionProviderDisposable);
+
+  // Registrar o Webview View Provider do Chat
+  const chatViewProvider = new ChatViewProvider(context.extensionUri, client);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatViewProvider)
+  );
+
+  // Listener para telemetria de aceitação/rejeição
+  const textChangeDisposable = vscode.workspace.onDidChangeTextDocument((e) => {
+    AcceptanceTracker.getInstance().evaluateChange(e);
+  });
+  context.subscriptions.push(textChangeDisposable);
 
   // Escutar mudanças de configuração para atualizar o estado sem precisar recarregar a extensão
   const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
@@ -265,7 +460,9 @@ export function activate(context: vscode.ExtensionContext) {
         'css'
       ]);
 
+      modelResolver = new ModelResolver(endpoint);
       client.updateConfig(endpoint, model);
+      updateActiveModelProfile();
       updateStatusBar(enabled);
       registerProvider();
     }
@@ -275,7 +472,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Listeners para indexação incremental de arquivos
   const saveListener = vscode.workspace.onDidSaveTextDocument(async (document) => {
     const ext = path.extname(document.fileName);
-    if (['.js', '.ts', '.jsx', '.tsx'].includes(ext)) {
+    if (['.js', '.ts', '.jsx', '.tsx', '.py', '.go', '.rs'].includes(ext)) {
       console.log(`[Extension] Documento salvo detectado. Atualizando index: ${document.fileName}`);
       await SymbolIndexer.getInstance().indexFile(document.uri);
     }
@@ -292,7 +489,7 @@ export function activate(context: vscode.ExtensionContext) {
   const createListener = vscode.workspace.onDidCreateFiles(async (e) => {
     for (const fileUri of e.files) {
       const ext = path.extname(fileUri.fsPath);
-      if (['.js', '.ts', '.jsx', '.tsx'].includes(ext)) {
+      if (['.js', '.ts', '.jsx', '.tsx', '.py', '.go', '.rs'].includes(ext)) {
         await SymbolIndexer.getInstance().indexFile(fileUri);
       }
     }
@@ -300,15 +497,27 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(createListener);
 }
 
-function updateStatusBar(enabled: boolean) {
-  if (enabled) {
-    statusBarItem.text = '$(sparkle) AI Autocomplete';
-    statusBarItem.tooltip = 'AI Autocomplete Inline Habilitado (Ollama)';
-    statusBarItem.backgroundColor = undefined;
-  } else {
-    statusBarItem.text = '$(circle-slash) AI Autocomplete';
-    statusBarItem.tooltip = 'AI Autocomplete Inline Desabilitado';
+function updateStatusBar(enabled: boolean, stateOverride?: 'generating' | 'error') {
+  if (!enabled) {
+    statusBarItem.text = '$(circle-slash) Kuben';
+    statusBarItem.tooltip = 'Kuben Autocomplete: Desabilitado';
     statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+  } else if (!isConnected) {
+    statusBarItem.text = '$(circle-outline) Kuben';
+    statusBarItem.tooltip = 'Kuben Autocomplete: Ollama Offline / Desconectado';
+    statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+  } else if (stateOverride === 'generating') {
+    statusBarItem.text = '$(sync~spin) Kuben';
+    statusBarItem.tooltip = 'Kuben Autocomplete: Gerando sugestão...';
+    statusBarItem.backgroundColor = undefined;
+  } else if (stateOverride === 'error') {
+    statusBarItem.text = '$(warning) Kuben';
+    statusBarItem.tooltip = 'Kuben Autocomplete: Erro na última requisição';
+    statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+  } else {
+    statusBarItem.text = '$(sparkle) Kuben';
+    statusBarItem.tooltip = 'Kuben Autocomplete: Pronto (Ollama Conectado)';
+    statusBarItem.backgroundColor = undefined;
   }
   statusBarItem.show();
 }

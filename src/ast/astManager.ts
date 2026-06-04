@@ -41,7 +41,10 @@ export class ASTManager {
         { id: 'typescript', file: 'tree-sitter-typescript.wasm' },
         { id: 'typescriptreact', file: 'tree-sitter-tsx.wasm' },
         { id: 'javascript', file: 'tree-sitter-javascript.wasm' },
-        { id: 'javascriptreact', file: 'tree-sitter-javascript.wasm' }
+        { id: 'javascriptreact', file: 'tree-sitter-javascript.wasm' },
+        { id: 'python', file: 'tree-sitter-python.wasm' },
+        { id: 'go', file: 'tree-sitter-go.wasm' },
+        { id: 'rust', file: 'tree-sitter-rust.wasm' }
       ];
 
       for (const lang of languagesToLoad) {
@@ -121,21 +124,32 @@ export class ASTManager {
     // Função recursiva simples para varrer a árvore AST em busca de declarações
     const traverse = (node: TreeSitter.Node) => {
       // Declaração de função
-      if (node.type === 'function_declaration' || node.type === 'generator_function_declaration') {
+      if (
+        node.type === 'function_declaration' ||
+        node.type === 'generator_function_declaration' ||
+        node.type === 'function_definition' || // Python
+        node.type === 'function_item' || // Rust
+        node.type === 'method_declaration' // Go method
+      ) {
         const nameNode = node.childForFieldName('name');
         if (nameNode) {
           const name = nameNode.text;
-          const signature = node.text.split('{')[0].trim(); // Extrai até a abertura de chaves
+          const signature = node.text.split('{')[0].split('\n')[0].split(':')[0].trim(); // Extrai assinatura limpa
           symbols.push({ name, kind: 'Function', signature });
         }
       } 
-      // Declaração de classe
-      else if (node.type === 'class_declaration') {
+      // Declaração de classe/estrutura/tipo
+      else if (
+        node.type === 'class_declaration' ||
+        node.type === 'class_definition' || // Python
+        node.type === 'struct_item' || // Rust struct
+        node.type === 'enum_item' || // Rust enum
+        node.type === 'type_declaration' // Go type
+      ) {
         const nameNode = node.childForFieldName('name');
         if (nameNode) {
           const name = nameNode.text;
-          // Pega apenas a assinatura da classe (ex: class MyClass extends Base)
-          const signature = node.text.split('{')[0].trim();
+          const signature = node.text.split('{')[0].split('\n')[0].split(':')[0].trim();
           symbols.push({ name, kind: 'Class', signature });
         }
       }
@@ -144,7 +158,7 @@ export class ASTManager {
         const nameNode = node.childForFieldName('name');
         if (nameNode) {
           const name = nameNode.text;
-          const signature = node.text.split('{')[0].trim();
+          const signature = node.text.split('{')[0].split('\n')[0].split(':')[0].trim();
           symbols.push({ name, kind: 'Method', signature });
         }
       }

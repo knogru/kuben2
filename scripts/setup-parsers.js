@@ -26,6 +26,18 @@ const filesToCopy = [
   {
     src: path.join(projectRoot, 'node_modules', 'tree-sitter-wasms', 'out', 'tree-sitter-javascript.wasm'),
     dest: path.join(destDir, 'tree-sitter-javascript.wasm')
+  },
+  {
+    src: path.join(projectRoot, 'node_modules', 'tree-sitter-wasms', 'out', 'tree-sitter-python.wasm'),
+    dest: path.join(destDir, 'tree-sitter-python.wasm')
+  },
+  {
+    src: path.join(projectRoot, 'node_modules', 'tree-sitter-wasms', 'out', 'tree-sitter-go.wasm'),
+    dest: path.join(destDir, 'tree-sitter-go.wasm')
+  },
+  {
+    src: path.join(projectRoot, 'node_modules', 'tree-sitter-wasms', 'out', 'tree-sitter-rust.wasm'),
+    dest: path.join(destDir, 'tree-sitter-rust.wasm')
   }
 ];
 

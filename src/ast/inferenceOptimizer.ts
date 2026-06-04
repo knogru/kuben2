@@ -20,6 +20,63 @@ export interface InferenceParams {
 export class InferenceOptimizer {
 
   /**
+   * Avalia se a posição atual do cursor está inserida em um bloco vazio (como corpo de função).
+   */
+  public static isBlockEmpty(
+    languageId: string,
+    code: string,
+    cursorLine: number,
+    cursorCol: number
+  ): boolean {
+    const astManager = ASTManager.getInstance();
+    if (!astManager.isReady()) {
+      return false;
+    }
+
+    try {
+      const tree = astManager.parse(languageId, code);
+      if (!tree) {
+        return false;
+      }
+
+      const node = tree.rootNode.descendantForPosition({
+        row: cursorLine,
+        column: cursorCol
+      });
+
+      if (!node) {
+        return false;
+      }
+
+      let current: any = node;
+      while (current) {
+        if (
+          current.type === 'statement_block' ||
+          current.type === 'function_definition' ||
+          current.type === 'block'
+        ) {
+          const blockText = current.text.trim();
+          if (blockText.startsWith('{') && blockText.endsWith('}')) {
+            const innerText = blockText.slice(1, -1).trim();
+            return innerText === '' || innerText.startsWith('//') || innerText.startsWith('/*') || innerText.includes('TODO');
+          }
+          if (languageId === 'python') {
+            const colonIndex = current.text.indexOf(':');
+            if (colonIndex !== -1) {
+              const bodyText = current.text.substring(colonIndex + 1).trim();
+              return bodyText === '' || bodyText === 'pass' || bodyText.startsWith('#') || bodyText.includes('TODO');
+            }
+          }
+        }
+        current = current.parent;
+      }
+    } catch (e) {
+      console.error('[InferenceOptimizer] isBlockEmpty check failed:', e);
+    }
+    return false;
+  }
+
+  /**
    * Determina os parâmetros ideais de inferência com base na posição do cursor
    * dentro da árvore sintática do documento.
    *

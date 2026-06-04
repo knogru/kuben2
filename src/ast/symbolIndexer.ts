@@ -97,6 +97,12 @@ export class SymbolIndexer {
           languageId = 'typescriptreact';
         } else if (ext === '.jsx') {
           languageId = 'javascriptreact';
+        } else if (ext === '.py') {
+          languageId = 'python';
+        } else if (ext === '.go') {
+          languageId = 'go';
+        } else if (ext === '.rs') {
+          languageId = 'rust';
         }
 
         const symbols = astManager.getLocalSymbols(languageId, content);

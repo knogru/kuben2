@@ -27,6 +27,24 @@
         "title": "AI Autocomplete: Exibir Telemetria de Latência"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "kuben-sidebar",
+          "title": "Kuben AI",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "views": {
+      "kuben-sidebar": [
+        {
+          "type": "webview",
+          "id": "kuben.chat",
+          "name": "Chat com Kuben"
+        }
+      ]
+    },
     "configuration": {
       "title": "AI Autocomplete",
       "properties": {
@@ -89,6 +107,28 @@
           "type": "boolean",
           "default": true,
           "description": "Habilita a injeção de contexto estruturado de dependências (Graph RAG leve)."
+        },
+        "aiAutocomplete.modelProfile": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "qwen", "deepseek", "codellama", "starcoder", "codegemma", "phi", "chat_only"],
+          "description": "Forçar um perfil de tokens FIM específico. 'auto' detecta pelo nome do modelo."
+        },
+        "aiAutocomplete.modelContextWindow": {
+          "type": "integer",
+          "default": 0,
+          "description": "Sobrescrever a janela de contexto do modelo (0 = usar valor padrão do perfil)."
+        },
+        "aiAutocomplete.numPredict": {
+          "type": "integer",
+          "default": 0,
+          "description": "Sobrescrever num_predict do autocomplete (0 = usar valor recomendado do perfil)."
+        },
+        "aiAutocomplete.additionalStopSequences": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Sequências de parada (stop tokens) adicionais para geração de código."
         }
       }
     }
