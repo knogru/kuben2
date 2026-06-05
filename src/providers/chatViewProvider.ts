@@ -90,11 +90,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           webviewView.webview.postMessage({ type: 'settingsSaved' });
           break;
         }
+        case 'regenerate': {
+          if (this.history.length > 0 && this.history[this.history.length - 1].role === 'assistant') {
+            this.history.pop();
+            await this.handleChatQuery('', 'chat', true);
+          }
+          break;
+        }
       }
     });
   }
 
-  private async handleChatQuery(text: string, mode: string = 'chat') {
+  private async handleChatQuery(text: string, mode: string = 'chat', isRegenerate: boolean = false) {
     if (!this._view) return;
 
     // Inicializar servidores MCP silenciosamente (se ainda não estiverem)
@@ -196,8 +203,9 @@ REGRAS OBRIGATÓRIAS:
 <tools>
 {
   "name": "aplicar_modificacao",
-  "description": "Substitui um bloco de código existente por um novo bloco no editor ativo.",
+  "description": "Substitui um bloco de código existente por um novo bloco em um arquivo do repositório.",
   "arguments": {
+    "filePath": "caminho relativo do arquivo (ex: src/domain/file.ts)",
     "oldBlock": "o código antigo exatamente como está no arquivo",
     "newBlock": "o código modificado"
   }
@@ -250,7 +258,9 @@ Para usar ferramentas, responda APENAS com:
       this.history[0] = { role: 'system', content: systemPrompt };
     }
 
-    this.history.push({ role: 'user', content: prompt });
+    if (!isRegenerate) {
+      this.history.push({ role: 'user', content: prompt });
+    }
 
     let reply = '';
     try {
@@ -268,29 +278,27 @@ Para usar ferramentas, responda APENAS com:
         try {
           const toolData = JSON.parse(toolCallStr);
           if (toolData.name === 'aplicar_modificacao') {
-            this._view.webview.postMessage({ type: 'chunk', text: '\n\n*[⚙️ Executando aplicar_modificacao...]*\n' });
+            this._view.webview.postMessage({ type: 'chunk', text: '\n\n*[⚙️ Aguardando sua confirmação para editar o arquivo...]*\n' });
             
             const { EditorTool } = require('../infrastructure/tools/editorTool');
-            const editor = vscode.window.activeTextEditor;
             
-            if (editor) {
-              const success = await EditorTool.applyBlockEdit(editor.document, toolData.arguments.oldBlock, toolData.arguments.newBlock);
-              const toolResult = success 
-                ? "SUCESSO: O bloco foi substituído no editor." 
-                : "FALHA: O `oldBlock` não foi encontrado. Certifique-se de copiar exatamente como está no arquivo, incluindo indentação.";
-              
-              // Injeta o resultado da ferramenta de volta no histórico como se fosse o sistema/ambiente
-              this.history.push({ role: 'user', content: `[Resultado da Ferramenta]: ${toolResult}\nConclua a sua resposta ao usuário.` });
-              
-              let followUp = '';
-              for await (const chunk of this.client.generateChatStream(this.history)) {
-                followUp += chunk;
-                this._view.webview.postMessage({ type: 'chunk', text: chunk });
-              }
-              this.history.push({ role: 'assistant', content: followUp });
-            } else {
-              this._view.webview.postMessage({ type: 'chunk', text: '\n\n*[❌ Erro: Nenhum editor ativo]*\n' });
+            const result = await EditorTool.applyBlockEdit(
+              toolData.arguments.filePath,
+              toolData.arguments.oldBlock,
+              toolData.arguments.newBlock
+            );
+            
+            const toolResult = result.success ? `SUCESSO: ${result.message}` : `FALHA/RECUSADO: ${result.message}`;
+            
+            // Injeta o resultado da ferramenta de volta no histórico
+            this.history.push({ role: 'user', content: `[Resultado da Ferramenta]: ${toolResult}\nResponda ao usuário com base nisso.` });
+            
+            let followUp = '';
+            for await (const chunk of this.client.generateChatStream(this.history)) {
+              followUp += chunk;
+              this._view.webview.postMessage({ type: 'chunk', text: chunk });
             }
+            this.history.push({ role: 'assistant', content: followUp });
           } else {
             // Qualquer outra ferramenta é tratada como uma chamada MCP nativa (read_file, sequentialthinking, create_entities)
             this._view.webview.postMessage({ type: 'chunk', text: `\n\n*[⚙️ Executando MCP: ${toolData.name}...]*\n` });
@@ -392,9 +400,13 @@ REGRAS OBRIGATÓRIAS:
     try {
       let html = fs.readFileSync(htmlPath, 'utf8');
       const nonce = this.getNonce();
+      const markedUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'resources', 'webview', 'marked.js'));
+      const purifyUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'resources', 'webview', 'purify.js'));
       // Substituir os placeholders no HTML
       html = html.replace(/\${nonce}/g, nonce);
       html = html.replace(/\${cspSource}/g, webview.cspSource);
+      html = html.replace(/\${markedUri}/g, markedUri.toString());
+      html = html.replace(/\${purifyUri}/g, purifyUri.toString());
       return html;
     } catch (err) {
       return `<html><body><h3>Erro ao carregar o chat: ${err}</h3></body></html>`;

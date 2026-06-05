@@ -24,7 +24,8 @@ Desenvolvida com foco em privacidade absoluta e consumo eficiente de recursos, a
 *   **Auto-Healing (Formatação e Correção Sintática ao Aceitar)**: Ao aceitar uma sugestão pressionando `Tab`, a extensão varre as linhas acima e abaixo automaticamente para:
     1.  **Formatar o código circundante** usando o formatador ativo do VS Code.
     2.  **Identificar erros sintáticos e alertas de linting**, acionando o modelo local para corrigi-los automaticamente em segundo plano.
-*   **Chat Integrado na Barra Lateral**: Um painel interativo para conversar com a IA local, enviar trechos de código e usar comandos rápidos como `/explain`, `/fix`, `/test` e `/doc`.
+*   **Agente de Edição Autônoma**: O chat não apenas sugere, mas *aplica* edições de refatoração diretamente nos seus arquivos. Com um sistema *Human-in-the-loop*, toda edição aguarda sua aprovação (Manter/Desfazer), contando com um motor seguro de Rollback.
+*   **Chat Integrado na Barra Lateral**: Um painel interativo renderizando Markdown rico, equipado com botões para "Copiar" mensagens e "Refazer" respostas da IA. Suporta comandos rápidos como `/explain`, `/fix`, `/test` e `/doc`.
 *   **Ações de Código Rápidas (Menu de Contexto)**: Selecione qualquer bloco de código no editor, clique com o botão direito e execute comandos instantâneos de IA.
 *   **Telemetria de Desempenho e Aceitação**: Monitore a latência das requisições e a taxa de aceitação das sugestões em tempo real.
 *   **Controles Rápidos na Barra de Status**: Ícone interativo na barra de status que reflete o estado do Ollama e permite pausar/retomar o autocomplete com um único clique.
