@@ -57,7 +57,10 @@
         "aiAutocomplete.provider": {
           "type": "string",
           "default": "ollama",
-          "enum": ["ollama", "openai"],
+          "enum": [
+            "ollama",
+            "openai"
+          ],
           "description": "Provedor de IA (Ollama local ou compatível com OpenAI/LM Studio)."
         },
         "aiAutocomplete.apiKey": {
@@ -128,7 +131,16 @@
         "aiAutocomplete.modelProfile": {
           "type": "string",
           "default": "auto",
-          "enum": ["auto", "qwen", "deepseek", "codellama", "starcoder", "codegemma", "phi", "chat_only"],
+          "enum": [
+            "auto",
+            "qwen",
+            "deepseek",
+            "codellama",
+            "starcoder",
+            "codegemma",
+            "phi",
+            "chat_only"
+          ],
           "description": "Forçar um perfil de tokens FIM específico. 'auto' detecta pelo nome do modelo."
         },
         "aiAutocomplete.modelContextWindow": {
@@ -143,7 +155,9 @@
         },
         "aiAutocomplete.additionalStopSequences": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Sequências de parada (stop tokens) adicionais para geração de código."
         },
@@ -181,6 +195,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "web-tree-sitter": "^0.25.3"
   },
   "overrides": {
