@@ -28,7 +28,7 @@ export class MCPManager {
         name: `kuben-${id}`,
         version: '1.0.0'
       }, {
-        capabilities: { tools: {} }
+        capabilities: {}
       });
 
       await client.connect(transport);
