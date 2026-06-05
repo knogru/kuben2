@@ -39,6 +39,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.handleShortcut(data.command);
           break;
         }
+        case 'getSettings': {
+          const config = vscode.workspace.getConfiguration('aiAutocomplete');
+          webviewView.webview.postMessage({
+            type: 'initSettings',
+            config: {
+              provider: config.get<string>('provider', 'ollama'),
+              endpoint: config.get<string>('endpoint', 'http://localhost:11434'),
+              apiKey: config.get<string>('apiKey', ''),
+              model: config.get<string>('model', 'qwen2.5-coder:1.5b-base'),
+              chatModel: config.get<string>('chatModel', 'qwen2.5-coder:1.5b-instruct')
+            }
+          });
+          break;
+        }
+        case 'fetchModels': {
+          try {
+            let models: string[] = [];
+            const headers: any = { 'Content-Type': 'application/json' };
+            if (data.apiKey) headers['Authorization'] = `Bearer ${data.apiKey}`;
+            
+            if (data.provider === 'openai') {
+              const res = await fetch(`${data.url}/models`, { headers });
+              if (!res.ok) throw new Error(`Status ${res.status}`);
+              const json = await res.json() as any;
+              models = (json.data || []).map((m: any) => m.id);
+            } else {
+              const res = await fetch(`${data.url}/api/tags`);
+              if (!res.ok) throw new Error(`Status ${res.status}`);
+              const json = await res.json() as any;
+              models = (json.models || []).map((m: any) => m.name);
+            }
+            webviewView.webview.postMessage({ type: 'modelsLoaded', models });
+          } catch (err: any) {
+            webviewView.webview.postMessage({ type: 'modelsError', error: err.message || String(err) });
+          }
+          break;
+        }
+        case 'saveSettings': {
+          const config = vscode.workspace.getConfiguration('aiAutocomplete');
+          await config.update('provider', data.provider, vscode.ConfigurationTarget.Global);
+          await config.update('endpoint', data.url, vscode.ConfigurationTarget.Global);
+          await config.update('apiKey', data.apiKey, vscode.ConfigurationTarget.Global);
+          if (data.model) await config.update('model', data.model, vscode.ConfigurationTarget.Global);
+          if (data.chatModel) await config.update('chatModel', data.chatModel, vscode.ConfigurationTarget.Global);
+          webviewView.webview.postMessage({ type: 'settingsSaved' });
+          break;
+        }
       }
     });
   }

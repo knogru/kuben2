@@ -54,10 +54,21 @@
           "default": true,
           "description": "Habilita ou desabilita o autocomplete de código inline."
         },
+        "aiAutocomplete.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": ["ollama", "openai"],
+          "description": "Provedor de IA (Ollama local ou compatível com OpenAI/LM Studio)."
+        },
+        "aiAutocomplete.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Chave de API (opcional para provedores locais, necessária para LiteLLM/OpenAI)."
+        },
         "aiAutocomplete.endpoint": {
           "type": "string",
           "default": "http://localhost:11434",
-          "description": "URL do endpoint do Ollama."
+          "description": "URL do endpoint do provedor (ex: http://localhost:11434 para Ollama, ou http://localhost:1234/v1 para LM Studio)."
         },
         "aiAutocomplete.model": {
           "type": "string",

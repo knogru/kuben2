@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <title>Kuben AI Chat</title>
+  <title>Kuben AI</title>
   <style>
     body {
       background-color: var(--vscode-editor-background, #1e1e1e);
@@ -19,7 +19,38 @@
       box-sizing: border-box;
     }
 
-    /* Container de Mensagens */
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--vscode-widget-border, #303031);
+      background-color: var(--vscode-editorWidget-background, #252526);
+    }
+    .tab {
+      padding: 10px 16px;
+      cursor: pointer;
+      opacity: 0.6;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+    .tab:hover { opacity: 0.9; }
+    .tab.active {
+      opacity: 1;
+      border-bottom: 2px solid var(--vscode-focusBorder, #007fd4);
+      color: var(--vscode-focusBorder, #007fd4);
+    }
+
+    /* Views */
+    .view {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .view.active {
+      display: flex;
+    }
+
+    /* Chat Container */
     #chat-container {
       flex: 1;
       overflow-y: auto;
@@ -28,8 +59,6 @@
       flex-direction: column;
       gap: 12px;
     }
-
-    /* Bolhas de Mensagem */
     .message {
       max-width: 90%;
       padding: 8px 12px;
@@ -38,18 +67,15 @@
       word-wrap: break-word;
       animation: fadeIn 0.2s ease-out;
     }
-
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(4px); }
       to { opacity: 1; transform: translateY(0); }
     }
-
     .user {
       align-self: flex-end;
       background-color: var(--vscode-button-background, #0e639c);
       color: var(--vscode-button-foreground, #ffffff);
     }
-
     .assistant {
       align-self: flex-start;
       background-color: var(--vscode-editorWidget-background, #252526);
@@ -57,7 +83,7 @@
       color: var(--vscode-editorWidget-foreground, #cccccc);
     }
 
-    /* Caixa de entrada */
+    /* Input area */
     #input-container {
       padding: 8px 12px;
       background-color: var(--vscode-editorWidget-background, #252526);
@@ -66,12 +92,10 @@
       flex-direction: column;
       gap: 8px;
     }
-
     #textarea-wrapper {
       display: flex;
       gap: 6px;
     }
-
     textarea {
       flex: 1;
       height: 48px;
@@ -82,193 +106,186 @@
       border-radius: 4px;
       padding: 6px 8px;
       font-family: inherit;
-      font-size: inherit;
       outline: none;
     }
-
-    textarea:focus {
-      border-color: var(--vscode-focusBorder, #007fd4);
-    }
-
+    textarea:focus { border-color: var(--vscode-focusBorder, #007fd4); }
     button {
       background-color: var(--vscode-button-background, #0e639c);
       color: var(--vscode-button-foreground, #ffffff);
       border: none;
       border-radius: 4px;
-      padding: 0 14px;
+      padding: 6px 14px;
       cursor: pointer;
       font-weight: 600;
-      transition: background-color 0.1s ease;
     }
+    button:hover { background-color: var(--vscode-button-hoverBackground, #1177bb); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    button:hover {
-      background-color: var(--vscode-button-hoverBackground, #1177bb);
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    /* Atalhos de Comandos Rápidos */
-    #shortcuts {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
+    /* Shortcuts */
+    #shortcuts { display: flex; gap: 6px; flex-wrap: wrap; }
     .shortcut-btn {
       background-color: var(--vscode-input-background, #3c3c3c);
       color: var(--vscode-input-foreground, #cccccc);
       border: 1px solid var(--vscode-widget-border, #303031);
-      padding: 3px 8px;
-      font-size: 11px;
-      border-radius: 3px;
-      cursor: pointer;
+      padding: 3px 8px; font-size: 11px; border-radius: 3px; cursor: pointer;
     }
-
-    .shortcut-btn:hover {
+    .shortcut-btn:hover, .shortcut-btn.active {
       background-color: var(--vscode-button-background, #0e639c);
       color: var(--vscode-button-foreground, #ffffff);
     }
+    .shortcut-btn.active { font-weight: bold; border-color: var(--vscode-focusBorder); }
 
-    .shortcut-btn.active {
-      background-color: var(--vscode-button-background, #0e639c);
-      color: var(--vscode-button-foreground, #ffffff);
-      border-color: var(--vscode-focusBorder, #007fd4);
-      font-weight: bold;
-    }
-
-    /* Blocos de Código em Markdown */
+    /* Markdown elements */
     pre {
-      background-color: rgba(0, 0, 0, 0.25);
-      padding: 8px;
-      border-radius: 4px;
-      overflow-x: auto;
-      margin: 6px 0;
-      position: relative;
+      background-color: rgba(0,0,0,0.25);
+      padding: 8px; border-radius: 4px;
+      overflow-x: auto; margin: 6px 0; position: relative;
     }
-
-    code {
-      font-family: var(--vscode-editor-font-family, Consolas, Monaco, monospace);
-      font-size: 12px;
-    }
-
+    code { font-family: var(--vscode-editor-font-family, Consolas, Monaco, monospace); font-size: 12px; }
     .copy-btn {
-      position: absolute;
-      top: 4px;
-      right: 4px;
-      padding: 2px 6px;
-      font-size: 10px;
-      background: var(--vscode-input-background, #3c3c3c);
-      border: 1px solid var(--vscode-widget-border, #303031);
-      border-radius: 3px;
-      color: var(--vscode-input-foreground, #cccccc);
-      cursor: pointer;
+      position: absolute; top: 4px; right: 4px; padding: 2px 6px; font-size: 10px;
+      background: var(--vscode-input-background); border: 1px solid var(--vscode-widget-border);
+      border-radius: 3px; cursor: pointer;
     }
+    .copy-btn:hover { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 
-    .copy-btn:hover {
-      background: var(--vscode-button-background, #0e639c);
-      color: var(--vscode-button-foreground, #ffffff);
+    /* Settings UI */
+    #settings-view {
+      padding: 16px;
+      overflow-y: auto;
     }
+    .settings-form { display: flex; flex-direction: column; gap: 16px; }
+    .settings-group { display: flex; flex-direction: column; gap: 6px; }
+    .settings-group label { font-weight: 600; font-size: 12px; }
+    .settings-group input, .settings-group select {
+      padding: 8px;
+      background-color: var(--vscode-input-background, #3c3c3c);
+      color: var(--vscode-input-foreground, #cccccc);
+      border: 1px solid var(--vscode-input-border, #3c3c3c);
+      border-radius: 4px;
+      outline: none;
+    }
+    .settings-group input:focus, .settings-group select:focus {
+      border-color: var(--vscode-focusBorder, #007fd4);
+    }
+    .status-msg { margin-top: 8px; font-size: 12px; color: var(--vscode-notificationsInfoIcon-foreground); }
   </style>
 </head>
 <body>
-  <div id="chat-container">
-    <div class="message assistant">
-      Olá! Eu sou o Kuben. Como posso ajudar você com o seu código hoje?
+  <div class="tabs">
+    <div class="tab active" data-target="chat-view">Chat</div>
+    <div class="tab" data-target="settings-view">Settings</div>
+  </div>
+
+  <div id="chat-view" class="view active">
+    <div id="chat-container">
+      <div class="message assistant">
+        Olá! Eu sou o Kuben. Como posso ajudar você com o seu código hoje?
+      </div>
+    </div>
+    <div id="input-container">
+      <div id="shortcuts">
+        <button class="shortcut-btn" data-command="/explain">/explain</button>
+        <button class="shortcut-btn" data-command="/fix">/fix</button>
+        <button class="shortcut-btn" data-command="/test">/test</button>
+        <button class="shortcut-btn" data-command="/doc">/doc</button>
+      </div>
+      <div id="textarea-wrapper">
+        <textarea id="prompt" placeholder="Pergunte ao Kuben... (Ctrl+Enter para enviar)"></textarea>
+        <button id="send-btn">Enviar</button>
+      </div>
     </div>
   </div>
 
-  <div id="input-container">
-    <div id="shortcuts">
-      <button class="shortcut-btn" data-command="/explain">/explain</button>
-      <button class="shortcut-btn" data-command="/fix">/fix</button>
-      <button class="shortcut-btn" data-command="/test">/test</button>
-      <button class="shortcut-btn" data-command="/doc">/doc</button>
-    </div>
-    <div id="textarea-wrapper">
-      <textarea id="prompt" placeholder="Pergunte ao Kuben... (Ctrl+Enter para enviar)"></textarea>
-      <button id="send-btn">Enviar</button>
+  <div id="settings-view" class="view">
+    <div class="settings-form">
+      <div class="settings-group">
+        <label>Provedor de Modelos</label>
+        <select id="setting-provider">
+          <option value="ollama">Ollama (Local)</option>
+          <option value="openai">OpenAI Compatible (LM Studio, LiteLLM, vLLM)</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <label>Base URL</label>
+        <input type="text" id="setting-url" placeholder="http://localhost:11434">
+      </div>
+      <div class="settings-group">
+        <label>API Key (Opcional)</label>
+        <input type="password" id="setting-apikey" placeholder="Sua chave aqui">
+      </div>
+      <button id="btn-fetch-models">Carregar Modelos Disponíveis</button>
+      <div id="fetch-status" class="status-msg"></div>
+      
+      <div class="settings-group">
+        <label>Modelo para Autocomplete (FIM)</label>
+        <select id="setting-model"></select>
+      </div>
+      <div class="settings-group">
+        <label>Modelo para Chat</label>
+        <select id="setting-chatmodel"></select>
+      </div>
+      
+      <button id="btn-save-settings">Salvar Configurações</button>
+      <div id="save-status" class="status-msg"></div>
     </div>
   </div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+
+    // --- TABS LOGIC ---
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.getAttribute('data-target')).classList.add('active');
+      });
+    });
+
+    // --- CHAT LOGIC ---
     const chatContainer = document.getElementById('chat-container');
     const promptInput = document.getElementById('prompt');
     const sendButton = document.getElementById('send-btn');
     let currentAssistantMessageDiv = null;
-    let currentMode = 'chat'; // 'chat', '/explain', '/fix', '/test', '/doc'
+    let currentMode = 'chat'; 
 
-    // Configurar event listeners programaticamente para respeitar a CSP e gerenciar os modos
     document.querySelectorAll('.shortcut-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const cmd = btn.getAttribute('data-command');
-        
         if (currentMode === cmd) {
-          // Desmarcar o modo atual se clicado novamente e voltar para chat
           currentMode = 'chat';
           btn.classList.remove('active');
           promptInput.placeholder = 'Pergunte ao Kuben... (Ctrl+Enter para enviar)';
         } else {
-          // Limpar estados ativos anteriores
           document.querySelectorAll('.shortcut-btn').forEach(b => b.classList.remove('active'));
-          // Ativar novo modo
           currentMode = cmd;
           btn.classList.add('active');
-          
-          let placeholderText = 'Pergunte ao Kuben...';
-          if (cmd === '/explain') placeholderText = 'Explicar código ativo... (Digite detalhes ou clique em Enviar)';
-          else if (cmd === '/fix') placeholderText = 'Corrigir erros no código ativo... (Digite detalhes ou clique em Enviar)';
-          else if (cmd === '/test') placeholderText = 'Gerar testes para o código ativo... (Digite detalhes ou clique em Enviar)';
-          else if (cmd === '/doc') placeholderText = 'Documentar código ativo... (Digite detalhes ou clique em Enviar)';
-          
-          promptInput.placeholder = placeholderText;
+          promptInput.placeholder = 'Digite detalhes ou clique em Enviar...';
         }
       });
     });
 
-    sendButton.addEventListener('click', () => {
-      sendMessage();
-    });
-
-    // Atalho Ctrl+Enter para enviar
+    sendButton.addEventListener('click', () => sendMessage());
     promptInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-      }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
 
-    // Ouvinte delegado para cliques nos botões de copiar do chat (evita bloqueio da CSP)
     chatContainer.addEventListener('click', (e) => {
       if (e.target && e.target.classList.contains('copy-btn')) {
         const codeId = e.target.getAttribute('data-code-id');
-        if (codeId) {
-          copyToClipboard(codeId, e.target);
-        }
+        if (codeId) copyToClipboard(codeId, e.target);
       }
     });
 
     function sendMessage() {
       const text = promptInput.value.trim();
-      
-      // Permitir enviar sem prompt caso estejamos em algum modo de atalho para atuar no código ativo
       if (!text && currentMode === 'chat') return;
-
       const displayPrompt = text || `Executar modo ${currentMode} no código do editor`;
-
-      // Adicionar mensagem do usuário na tela
       appendMessage('user', displayPrompt);
-      promptInput.value = '';
-      promptInput.disabled = true;
-      sendButton.disabled = true;
-
-      // Criar espaço para a resposta do assistente
+      promptInput.value = ''; promptInput.disabled = true; sendButton.disabled = true;
       currentAssistantMessageDiv = appendMessage('assistant', 'Pensando...');
-
-      // Notificar extensão com o texto e o modo
       vscode.postMessage({ type: 'chat', text: text, mode: currentMode });
     }
 
@@ -281,78 +298,122 @@
       return div;
     }
 
-    // Escutar mensagens vindas da extensão principal
+    function formatMarkdown(text) {
+      if (!text) return '';
+      let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      html = html.replace(/```([\w-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+        const id = 'code-' + Math.random().toString(36).substr(2, 9);
+        return `<pre><button class="copy-btn" data-code-id="${id}">Copiar</button><code id="${id}">${code.trim()}</code></pre>`;
+      });
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+      return html.replace(/\n/g, '<br>');
+    }
+
+    function copyToClipboard(id, btn) {
+      const codeEl = document.getElementById(id);
+      if (codeEl) navigator.clipboard.writeText(codeEl.innerText).then(() => {
+        btn.innerText = 'Copiado!'; setTimeout(() => btn.innerText = 'Copiar', 2000);
+      });
+    }
+
+    // --- SETTINGS LOGIC ---
+    const pProvider = document.getElementById('setting-provider');
+    const pUrl = document.getElementById('setting-url');
+    const pApiKey = document.getElementById('setting-apikey');
+    const pModel = document.getElementById('setting-model');
+    const pChatModel = document.getElementById('setting-chatmodel');
+    const btnFetch = document.getElementById('btn-fetch-models');
+    const btnSave = document.getElementById('btn-save-settings');
+    const fetchStatus = document.getElementById('fetch-status');
+    const saveStatus = document.getElementById('save-status');
+
+    pProvider.addEventListener('change', () => {
+      if(pProvider.value === 'openai') {
+        if(pUrl.value === 'http://localhost:11434') pUrl.value = 'http://localhost:1234/v1';
+      } else {
+        if(pUrl.value === 'http://localhost:1234/v1') pUrl.value = 'http://localhost:11434';
+      }
+    });
+
+    btnFetch.addEventListener('click', () => {
+      fetchStatus.innerText = 'Carregando modelos...';
+      vscode.postMessage({
+        type: 'fetchModels',
+        provider: pProvider.value,
+        url: pUrl.value,
+        apiKey: pApiKey.value
+      });
+    });
+
+    btnSave.addEventListener('click', () => {
+      saveStatus.innerText = 'Salvando...';
+      vscode.postMessage({
+        type: 'saveSettings',
+        provider: pProvider.value,
+        url: pUrl.value,
+        apiKey: pApiKey.value,
+        model: pModel.value,
+        chatModel: pChatModel.value
+      });
+    });
+
+    // --- MESSAGE LISTENER FROM EXTENSION ---
     window.addEventListener('message', event => {
-      const message = event.data;
-      switch (message.type) {
-        case 'clear':
-          chatContainer.innerHTML = '';
-          currentAssistantMessageDiv = null;
-          // Voltar ao modo chat geral
-          currentMode = 'chat';
-          document.querySelectorAll('.shortcut-btn').forEach(b => b.classList.remove('active'));
-          promptInput.placeholder = 'Pergunte ao Kuben... (Ctrl+Enter para enviar)';
-          break;
+      const msg = event.data;
+      switch (msg.type) {
         case 'chunk':
           if (currentAssistantMessageDiv) {
-            if (currentAssistantMessageDiv.innerHTML === 'Pensando...') {
-              currentAssistantMessageDiv.innerHTML = '';
-            }
-            // Concatenar e renderizar markdown
-            currentAssistantMessageDiv.accumulatedText = (currentAssistantMessageDiv.accumulatedText || '') + message.text;
+            if (currentAssistantMessageDiv.innerHTML === 'Pensando...') currentAssistantMessageDiv.innerHTML = '';
+            currentAssistantMessageDiv.accumulatedText = (currentAssistantMessageDiv.accumulatedText || '') + msg.text;
             currentAssistantMessageDiv.innerHTML = formatMarkdown(currentAssistantMessageDiv.accumulatedText);
             chatContainer.scrollTop = chatContainer.scrollHeight;
           }
           break;
         case 'done':
-          promptInput.disabled = false;
-          sendButton.disabled = false;
-          promptInput.focus();
+          promptInput.disabled = false; sendButton.disabled = false; promptInput.focus();
           currentAssistantMessageDiv = null;
           break;
         case 'error':
-          if (currentAssistantMessageDiv) {
-            currentAssistantMessageDiv.innerHTML = `<span style="color: var(--vscode-editorError-foreground, #f14c4c)">Erro na geração: ${message.text}</span>`;
-          }
-          promptInput.disabled = false;
-          sendButton.disabled = false;
+          if (currentAssistantMessageDiv) currentAssistantMessageDiv.innerHTML = `<span style="color: #f14c4c">Erro: ${msg.text}</span>`;
+          promptInput.disabled = false; sendButton.disabled = false;
+          break;
+        case 'clear':
+          chatContainer.innerHTML = ''; currentAssistantMessageDiv = null; currentMode = 'chat';
+          document.querySelectorAll('.shortcut-btn').forEach(b => b.classList.remove('active'));
+          break;
+        case 'initSettings':
+          // Populate current settings
+          pProvider.value = msg.config.provider;
+          pUrl.value = msg.config.endpoint;
+          pApiKey.value = msg.config.apiKey;
+          // Option creation helper
+          const addOpt = (sel, val) => {
+            const opt = document.createElement('option'); opt.value = val; opt.innerText = val; sel.appendChild(opt);
+          };
+          pModel.innerHTML = ''; pChatModel.innerHTML = '';
+          addOpt(pModel, msg.config.model);
+          addOpt(pChatModel, msg.config.chatModel);
+          break;
+        case 'modelsLoaded':
+          fetchStatus.innerText = `Encontrados ${msg.models.length} modelos.`;
+          pModel.innerHTML = ''; pChatModel.innerHTML = '';
+          msg.models.forEach(m => {
+            const opt1 = document.createElement('option'); opt1.value = m; opt1.innerText = m; pModel.appendChild(opt1);
+            const opt2 = document.createElement('option'); opt2.value = m; opt2.innerText = m; pChatModel.appendChild(opt2);
+          });
+          break;
+        case 'modelsError':
+          fetchStatus.innerText = `Erro ao carregar: ${msg.error}`;
+          break;
+        case 'settingsSaved':
+          saveStatus.innerText = 'Configurações salvas e aplicadas com sucesso!';
+          setTimeout(() => saveStatus.innerText = '', 3000);
           break;
       }
     });
 
-    // Renderizador Markdown extremamente básico e robusto
-    function formatMarkdown(text) {
-      if (!text) return '';
-      let html = text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-
-      // Renderizar blocos de código: ```lang ... ```
-      html = html.replace(/```([\w-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-        const id = 'code-' + Math.random().toString(36).substr(2, 9);
-        return `<pre><button class="copy-btn" data-code-id="${id}">Copiar</button><code id="${id}">${code.trim()}</code></pre>`;
-      });
-
-      // Renderizar códigos inline: `code`
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-      // Quebras de linha
-      html = html.replace(/\n/g, '<br>');
-
-      return html;
-    }
-
-    function copyToClipboard(id, btn) {
-      const codeEl = document.getElementById(id);
-      if (codeEl) {
-        const text = codeEl.innerText;
-        navigator.clipboard.writeText(text).then(() => {
-          btn.innerText = 'Copiado!';
-          setTimeout(() => btn.innerText = 'Copiar', 2000);
-        });
-      }
-    }
+    // Ask extension for current settings on load
+    vscode.postMessage({ type: 'getSettings' });
   </script>
 </body>
 </html>

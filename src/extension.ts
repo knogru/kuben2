@@ -40,6 +40,8 @@ export function activate(context: vscode.ExtensionContext) {
   }
   console.log(`[Extension] Configurações de Contexto - AST: ${useASTEngine}, Graph RAG: ${enableGraphRag}`);
   let endpoint = config.get<string>('endpoint', 'http://localhost:11434');
+  let apiKey = config.get<string>('apiKey', '');
+  let provider = config.get<string>('provider', 'ollama');
   let model = config.get<string>('model', 'qwen2.5-coder:1.5b-base');
   let chatModel = config.get<string>('chatModel', 'qwen2.5-coder:1.5b-instruct');
   let maxTokens = config.get<number>('maxTokens', 20);
@@ -59,7 +61,7 @@ export function activate(context: vscode.ExtensionContext) {
     'css'
   ]);
 
-  const client = new OllamaClient(endpoint, model, chatModel);
+  const client = new OllamaClient(endpoint, model, chatModel, provider, apiKey);
   let modelResolver = new ModelResolver(endpoint);
 
   async function updateActiveModelProfile() {
@@ -564,6 +566,8 @@ NÃO use markdown fences (\`\`\`), NÃO inclua prosa explicativa, comentários e
       config = vscode.workspace.getConfiguration('aiAutocomplete');
       enabled = config.get<boolean>('enabled', true);
       endpoint = config.get<string>('endpoint', 'http://localhost:11434');
+      apiKey = config.get<string>('apiKey', '');
+      provider = config.get<string>('provider', 'ollama');
       model = config.get<string>('model', 'qwen2.5-coder:1.5b-base');
       chatModel = config.get<string>('chatModel', 'qwen2.5-coder:1.5b-instruct');
       maxTokens = config.get<number>('maxTokens', 20);
@@ -592,7 +596,7 @@ NÃO use markdown fences (\`\`\`), NÃO inclua prosa explicativa, comentários e
       ]);
 
       modelResolver = new ModelResolver(endpoint);
-      client.updateConfig(endpoint, model, chatModel);
+      client.updateConfig(endpoint, model, chatModel, provider, apiKey);
       updateActiveModelProfile();
       updateStatusBar(enabled);
       registerProvider();

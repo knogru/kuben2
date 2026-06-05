@@ -17,13 +17,19 @@ export class OllamaClient {
   private abortController: AbortController | null = null;
   private activeModel: IResolvedModel | null = null;
   private chatModel: string = 'qwen2.5-coder:1.5b-instruct';
+  private provider: string = 'ollama';
+  private apiKey: string = '';
 
   constructor(
     private endpoint: string = 'http://localhost:11434',
     private model: string = 'qwen2.5-coder:1.5b-base',
-    chatModel?: string
+    chatModel?: string,
+    provider: string = 'ollama',
+    apiKey: string = ''
   ) {
     this.chatModel = chatModel || model;
+    this.provider = provider;
+    this.apiKey = apiKey;
   }
 
   setActiveModel(resolved: IResolvedModel) {
@@ -35,22 +41,30 @@ export class OllamaClient {
     return this.activeModel;
   }
 
-  // Permite atualizar as configurações dinamicamente quando mudam no editor
-  updateConfig(endpoint: string, model: string, chatModel?: string) {
+  updateConfig(endpoint: string, model: string, chatModel?: string, provider: string = 'ollama', apiKey: string = '') {
     this.endpoint = endpoint;
     this.model = model;
     this.chatModel = chatModel || model;
+    this.provider = provider;
+    this.apiKey = apiKey;
   }
 
-  /**
-   * Verifica se o servidor do Ollama está acessível.
-   */
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+    return headers;
+  }
+
   async checkConnection(): Promise<boolean> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);
     try {
-      const response = await fetch(`${this.endpoint}/api/tags`, {
+      const url = this.provider === 'openai' ? `${this.endpoint}/models` : `${this.endpoint}/api/tags`;
+      const response = await fetch(url, {
         method: 'GET',
+        headers: this.getHeaders(),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -61,17 +75,12 @@ export class OllamaClient {
     }
   }
 
-  /**
-   * Geração FIM síncrona (sem streaming) — mantida para compatibilidade.
-   * Aceita opções dinâmicas de inferência vindas do InferenceOptimizer.
-   */
   async generateWithFIM(
     prefix: string,
     suffix: string,
     maxTokens: number = 20,
     options?: Partial<GenerateOptions>
   ): Promise<string | undefined> {
-    // Cancelar requisição anterior se ainda estiver em progresso
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -93,59 +102,56 @@ export class OllamaClient {
       : PromptFormatter.formatChatFallback({ prefix, suffix });
 
     try {
-      const url = `${this.endpoint}/api/generate`;
-      console.log(`Calling Ollama API at ${url} with model ${this.model}`);
+      const isOllama = this.provider === 'ollama';
+      const url = isOllama ? `${this.endpoint}/api/generate` : `${this.endpoint}/completions`;
       
+      const payload = isOllama ? {
+        model: this.model,
+        prompt: prompt,
+        raw: requiresRaw,
+        stream: false,
+        options: {
+          num_predict: numPredict,
+          temperature: temperature,
+          top_p: 0.9,
+          repeat_penalty: repeatPenalty,
+          stop: stopSequences.length > 0 ? stopSequences : undefined,
+        }
+      } : {
+        model: this.model,
+        prompt: prompt,
+        max_tokens: numPredict,
+        temperature: temperature,
+        top_p: 0.9,
+        frequency_penalty: repeatPenalty > 1 ? (repeatPenalty - 1) : 0,
+        stop: stopSequences.length > 0 ? stopSequences : undefined,
+        stream: false
+      };
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          prompt: prompt,
-          raw: requiresRaw,
-          stream: false,
-          options: {
-            num_predict: numPredict,
-            temperature: temperature,
-            top_p: 0.9,
-            repeat_penalty: repeatPenalty,
-            stop: stopSequences.length > 0 ? stopSequences : undefined,
-          }
-        }),
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
         signal: this.abortController.signal,
       });
 
       if (!response.ok) {
-        console.error(`Ollama error: ${response.status} - ${response.statusText}`);
         return undefined;
       }
 
-      const data = (await response.json()) as { response: string };
-      console.log(`[OllamaClient] Raw response: "${data.response}"`);
-      const cleaned = this.cleanCompletion(data.response);
-      console.log(`[OllamaClient] Cleaned response: "${cleaned}"`);
-      return cleaned;
+      const data = await response.json() as any;
+      const responseText = isOllama ? data.response : (data.choices?.[0]?.text || '');
+      return this.cleanCompletion(responseText);
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log('Request cancelled');
-      } else {
-        console.error('Generation failed:', error);
-      }
       return undefined;
     }
   }
 
-  /**
-   * Geração FIM com streaming de tokens via NDJSON do Ollama.
-   * Retorna a string completa acumulada após o fim do stream.
-   * Permite cancelamento imediato se o usuário continuar digitando.
-   */
   async generateWithFIMStream(
     prefix: string,
     suffix: string,
     options?: Partial<GenerateOptions>
   ): Promise<string | undefined> {
-    // Cancelar requisição anterior se ainda estiver em progresso
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -167,37 +173,42 @@ export class OllamaClient {
       : PromptFormatter.formatChatFallback({ prefix, suffix });
 
     try {
-      const url = `${this.endpoint}/api/generate`;
+      const isOllama = this.provider === 'ollama';
+      const url = isOllama ? `${this.endpoint}/api/generate` : `${this.endpoint}/completions`;
+
+      const payload = isOllama ? {
+        model: this.model,
+        prompt: prompt,
+        raw: requiresRaw,
+        stream: true,
+        options: {
+          num_predict: numPredict,
+          temperature: temperature,
+          top_p: 0.9,
+          repeat_penalty: repeatPenalty,
+          stop: stopSequences.length > 0 ? stopSequences : undefined,
+        }
+      } : {
+        model: this.model,
+        prompt: prompt,
+        max_tokens: numPredict,
+        temperature: temperature,
+        top_p: 0.9,
+        stop: stopSequences.length > 0 ? stopSequences : undefined,
+        stream: true
+      };
 
       const response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          prompt: prompt,
-          raw: requiresRaw,
-          stream: true,
-          options: {
-            num_predict: numPredict,
-            temperature: temperature,
-            top_p: 0.9,
-            repeat_penalty: repeatPenalty,
-            stop: stopSequences.length > 0 ? stopSequences : undefined,
-          }
-        }),
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
         signal: this.abortController.signal,
       });
 
-      if (!response.ok) {
-        console.error(`Ollama stream error: ${response.status} - ${response.statusText}`);
-        return undefined;
-      }
+      if (!response.ok) return undefined;
 
-      // Processar NDJSON stream (cada linha é um JSON com { response: "token", done: bool })
       const body = response.body;
-      if (!body) {
-        return undefined;
-      }
+      if (!body) return undefined;
 
       const reader = body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -206,124 +217,7 @@ export class OllamaClient {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // Separar por linhas, pois o Ollama envia NDJSON (um JSON por linha)
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // A última parte pode estar incompleta
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) {
-            continue;
-          }
-
-          try {
-            const chunk = JSON.parse(trimmed) as { response?: string; done?: boolean };
-            if (chunk.response) {
-              accumulated += chunk.response;
-            }
-            if (chunk.done) {
-              // Stream concluído pelo servidor
-              const cleaned = this.cleanCompletion(accumulated);
-              console.log(`[OllamaClient] Stream concluído. Resultado: "${cleaned}"`);
-              return cleaned;
-            }
-          } catch {
-            // Ignorar linhas JSON malformadas silenciosamente
-          }
-        }
-      }
-
-      // Se saiu do loop sem um done explícito, limpar o que temos
-      const cleaned = this.cleanCompletion(accumulated);
-      return cleaned;
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log('[OllamaClient] Stream cancelled');
-      } else {
-        console.error('[OllamaClient] Stream generation failed:', error);
-      }
-      return undefined;
-    }
-  }
-
-  /**
-   * Geração para tarefas de instrução/chat síncronas.
-   */
-  async generateInstruction(prompt: string, systemPrompt?: string): Promise<string | undefined> {
-    try {
-      const url = `${this.endpoint}/api/generate`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          prompt: prompt,
-          system: systemPrompt,
-          stream: false,
-          options: {
-            temperature: 0.1,
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        console.error(`Ollama instruction error: ${response.status} - ${response.statusText}`);
-        return undefined;
-      }
-
-      const data = (await response.json()) as { response: string };
-      return data.response;
-    } catch (error) {
-      console.error('[OllamaClient] Instruction generation failed:', error);
-      return undefined;
-    }
-  }
-
-  /**
-   * Geração livre de stream de tokens (usado para Chat e Explicações).
-   * Retorna um AsyncGenerator que entrega os tokens à medida que chegam.
-   */
-  async *generateStream(prompt: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
-    try {
-      const url = `${this.endpoint}/api/generate`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: this.model,
-          prompt: prompt,
-          system: systemPrompt,
-          stream: true,
-          options: {
-            temperature: 0.2,
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama stream error: ${response.status} - ${response.statusText}`);
-      }
-
-      const body = response.body;
-      if (!body) {
-        return;
-      }
-
-      const reader = body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
+        if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -331,32 +225,155 @@ export class OllamaClient {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed) {
-            continue;
-          }
+          if (!trimmed) continue;
 
-          try {
-            const chunk = JSON.parse(trimmed) as { response?: string; done?: boolean };
-            if (chunk.response) {
-              yield chunk.response;
+          if (isOllama) {
+            try {
+              const chunk = JSON.parse(trimmed) as { response?: string; done?: boolean };
+              if (chunk.response) accumulated += chunk.response;
+              if (chunk.done) return this.cleanCompletion(accumulated);
+            } catch {}
+          } else {
+            // OpenAI SSE parsing
+            if (trimmed.startsWith('data: ')) {
+              const dataStr = trimmed.slice(6);
+              if (dataStr === '[DONE]') return this.cleanCompletion(accumulated);
+              try {
+                const chunk = JSON.parse(dataStr);
+                const text = chunk.choices?.[0]?.text;
+                if (text) accumulated += text;
+                if (chunk.choices?.[0]?.finish_reason) return this.cleanCompletion(accumulated);
+              } catch {}
             }
-          } catch {
-            // Ignorar erros de parse NDJSON parcial
+          }
+        }
+      }
+
+      return this.cleanCompletion(accumulated);
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  async generateInstruction(prompt: string, systemPrompt?: string): Promise<string | undefined> {
+    try {
+      const isOllama = this.provider === 'ollama';
+      const url = isOllama ? `${this.endpoint}/api/generate` : `${this.endpoint}/chat/completions`;
+
+      let payload: any;
+      if (isOllama) {
+        payload = {
+          model: this.model,
+          prompt: prompt,
+          system: systemPrompt,
+          stream: false,
+          options: { temperature: 0.1 }
+        };
+      } else {
+        const messages = [];
+        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+        messages.push({ role: 'user', content: prompt });
+        payload = {
+          model: this.model,
+          messages: messages,
+          temperature: 0.1,
+          stream: false
+        };
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) return undefined;
+      const data = await response.json() as any;
+      return isOllama ? data.response : (data.choices?.[0]?.message?.content || '');
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  async *generateStream(prompt: string, systemPrompt?: string): AsyncGenerator<string, void, unknown> {
+    const messages: ChatMessage[] = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: prompt });
+
+    yield* this.generateChatStream(messages);
+  }
+
+  async *generateChatStream(messages: ChatMessage[]): AsyncGenerator<string, void, unknown> {
+    try {
+      const isOllama = this.provider === 'ollama';
+      const url = isOllama ? `${this.endpoint}/api/chat` : `${this.endpoint}/chat/completions`;
+      const modelToUse = this.chatModel || this.model;
+      
+      const payload = isOllama ? {
+        model: modelToUse,
+        messages: messages,
+        stream: true,
+        options: { temperature: 0.5 }
+      } : {
+        model: modelToUse,
+        messages: messages,
+        stream: true,
+        temperature: 0.5
+      };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) throw new Error(`Status: ${response.status}`);
+
+      const body = response.body;
+      if (!body) return;
+
+      const reader = body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          if (isOllama) {
+            try {
+              const chunk = JSON.parse(trimmed) as { message?: { content?: string } };
+              if (chunk.message?.content) yield chunk.message.content;
+            } catch {}
+          } else {
+            // OpenAI SSE parsing
+            if (trimmed.startsWith('data: ')) {
+              const dataStr = trimmed.slice(6);
+              if (dataStr === '[DONE]') return;
+              try {
+                const chunk = JSON.parse(dataStr);
+                const content = chunk.choices?.[0]?.delta?.content;
+                if (content) yield content;
+              } catch {}
+            }
           }
         }
       }
     } catch (error) {
-      console.error('[OllamaClient] Stream libre failed:', error);
+      console.error('[OllamaClient] Chat stream failed:', error);
     }
   }
 
-  // Filtra a resposta para extrair apenas código, descartando prosa e markdown
   private cleanCompletion(response: string): string | undefined {
-    // Detectar alucinação cirílica (russo) comum em modelos pequenos como Qwen fora de contexto
-    if (/[\u0400-\u04FF]/.test(response)) {
-      console.log('[OllamaClient] Descartada resposta com caracteres cirílicos (alucinação do Qwen).');
-      return undefined;
-    }
+    if (/[\u0400-\u04FF]/.test(response)) return undefined;
 
     const lines = response.split('\n');
     const codeLines: string[] = [];
@@ -364,93 +381,18 @@ export class OllamaClient {
 
     for (const line of lines) {
       const trimmed = line.trim();
-
-      // Pular linhas em branco antes do código começar
       if (!foundCode && trimmed === '') continue;
-
-      // Ignorar markdown code fences
       if (trimmed.startsWith('```')) continue;
 
-      // Detectar se a linha parece prosa (começa com maiúscula e termina com pontuação)
       const isProse = /^[A-Z].*[.!?:]$/.test(trimmed);
       if (isProse && !foundCode) continue;
 
-      // A partir daqui é código
       foundCode = true;
       codeLines.push(line);
-
-      // Parar após 5 linhas de código
       if (codeLines.length >= 5) break;
     }
 
     const result = codeLines.join('\n').trimEnd();
     return result || undefined;
-  }
-
-  /**
-   * Geração de stream usando a API de Chat (/api/chat) do Ollama.
-   * Retorna os chunks de resposta à medida que são gerados.
-   */
-  async *generateChatStream(messages: ChatMessage[]): AsyncGenerator<string, void, unknown> {
-    try {
-      const url = `${this.endpoint}/api/chat`;
-      const modelToUse = this.chatModel || this.model;
-      
-      console.log(`[OllamaClient] Calling Chat API at ${url} with model ${modelToUse}`);
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: modelToUse,
-          messages: messages,
-          stream: true,
-          options: {
-            temperature: 0.5,
-          }
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama chat stream error: ${response.status} - ${response.statusText}`);
-      }
-
-      const body = response.body;
-      if (!body) {
-        return;
-      }
-
-      const reader = body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) {
-            continue;
-          }
-
-          try {
-            const chunk = JSON.parse(trimmed) as { message?: { content?: string }; done?: boolean };
-            if (chunk.message && chunk.message.content) {
-              yield chunk.message.content;
-            }
-          } catch {
-            // Ignorar erros de parse NDJSON parcial
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[OllamaClient] Chat stream failed:', error);
-    }
   }
 }
