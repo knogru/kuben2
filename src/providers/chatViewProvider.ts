@@ -3,6 +3,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { OllamaClient, ChatMessage } from '../ollamaClient';
 import { OpenTabsAgent } from '../infrastructure/openTabsAgent';
+import { DiagnosticsTool } from '../infrastructure/tools/diagnosticsTool';
+import { ContextOptimizer } from '../infrastructure/contextOptimizer';
+import { ASTManager } from '../ast/astManager';
+import { MCPManager } from '../infrastructure/mcpManager';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'kuben.chat';
@@ -93,6 +97,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async handleChatQuery(text: string, mode: string = 'chat') {
     if (!this._view) return;
 
+    // Inicializar servidores MCP silenciosamente (se ainda não estiverem)
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const mcpManager = MCPManager.getInstance();
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      await mcpManager.startDefaultServers(workspaceFolders[0].uri.fsPath);
+    }
+
     if (text.trim() === '/clear') {
       this.history = [];
       this._view.webview.postMessage({ type: 'clear' });
@@ -110,12 +121,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       lang = editor.document.languageId;
       const selection = editor.selection;
       if (!selection.isEmpty) {
-        contextStr += `Código Selecionado no Editor:\n\`\`\`${lang}\n${editor.document.getText(selection)}\n\`\`\`\n\n`;
+        const rawCode = editor.document.getText(selection);
+        contextStr += `Código Selecionado no Editor:\n\`\`\`${lang}\n${ContextOptimizer.minifyCode(rawCode)}\n\`\`\`\n\n`;
       } else {
         const docText = editor.document.getText();
-        const maxChars = 8000;
-        const truncatedText = docText.length > maxChars ? docText.substring(0, maxChars) + '\n... [Conteúdo Truncado]' : docText;
-        contextStr += `Código do Arquivo Aberto (${path.basename(editor.document.fileName)}):\n\`\`\`${lang}\n${truncatedText}\n\`\`\`\n\n`;
+        const minifiedText = ContextOptimizer.minifyCode(docText);
+        const maxChars = 12000;
+        
+        const astManager = ASTManager.getInstance();
+        if (minifiedText.length > maxChars && astManager.isReady()) {
+          const symbols = astManager.getLocalSymbols(lang, docText);
+          const skeleton = symbols.map(s => `// ${s.kind}: ${s.name}\n${s.signature} { ... }`).join('\n\n');
+          contextStr += `Esqueleto do Arquivo Aberto (${path.basename(editor.document.fileName)}):\n\`\`\`${lang}\n${skeleton}\n\`\`\`\n\n`;
+        } else {
+          const truncatedText = minifiedText.length > maxChars ? minifiedText.substring(0, maxChars) + '\n... [Conteúdo Truncado]' : minifiedText;
+          contextStr += `Código do Arquivo Aberto (${path.basename(editor.document.fileName)}):\n\`\`\`${lang}\n${truncatedText}\n\`\`\`\n\n`;
+        }
       }
       
       // Snippets Jaccard (apenas se houver texto de pergunta)
@@ -135,21 +156,86 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Definir os system prompts ricos baseados nas habilidades desejadas
-    let systemPrompt = "Você é o Kuben, um assistente de IA extremamente especializado em programação. Ajude o usuário respondendo suas dúvidas de desenvolvimento. Forneça respostas diretas, estruturadas e em português brasileiro. Quando fornecer blocos de código, use o formato markdown apropriado com a linguagem indicada (ex: ```javascript).";
+    let mcpToolsStr = '';
+    if (mcpManager.isReady('filesystem')) {
+      mcpToolsStr += `,
+{
+  "name": "read_file",
+  "description": "Lê o conteúdo de um arquivo no disco local.",
+  "arguments": { "path": "caminho absoluto do arquivo" }
+}`;
+    }
+    if (mcpManager.isReady('memory')) {
+      mcpToolsStr += `,
+{
+  "name": "create_entities",
+  "description": "Cria entidades no Grafo de Memória para lembrar fatos ou conceitos importantes.",
+  "arguments": {
+    "entities": [{ "name": "nome", "entityType": "tipo", "observations": ["fatos sobre a entidade"] }]
+  }
+}`;
+    }
+    if (mcpManager.isReady('thinking')) {
+      mcpToolsStr += `,
+{
+  "name": "sequentialthinking",
+  "description": "Ferramenta para raciocínio profundo passo a passo antes de responder o usuário.",
+  "arguments": { "thought": "Seu raciocínio atual", "thoughtNumber": 1, "totalThoughts": 3, "nextThoughtNeeded": true }
+}`;
+    }
+
+    const BASE_SYSTEM_PROMPT = `Você é o Kuben, um motor de IA estritamente focado em código.
+REGRAS OBRIGATÓRIAS:
+<rules>
+1. Seja absolutamente direto. NUNCA use formalidades ou divagações (ex: "Aqui está o código...", "Claro!").
+2. Sempre use blocos de código em markdown (ex: \`\`\`javascript).
+3. Seja conciso e retorne APENAS a solução técnica solicitada.
+4. Para modificar arquivos, acione a ferramenta aplicar_modificacao emitindo JSON na tag <tool_call>.
+</rules>
+
+<tools>
+{
+  "name": "aplicar_modificacao",
+  "description": "Substitui um bloco de código existente por um novo bloco no editor ativo.",
+  "arguments": {
+    "oldBlock": "o código antigo exatamente como está no arquivo",
+    "newBlock": "o código modificado"
+  }
+}${mcpToolsStr}
+</tools>
+
+Para usar ferramentas, responda APENAS com:
+<tool_call>
+{
+  "name": "nome_da_ferramenta",
+  "arguments": { ... }
+}
+</tool_call>`;
+    
+    let systemPrompt = BASE_SYSTEM_PROMPT;
     let prompt = '';
 
     if (mode === '/explain') {
-      systemPrompt = "Você é o Kuben, um especialista em engenharia reversa e análise de código. Sua missão é explicar o código fornecido linha por linha ou bloco por bloco de forma pedagógica, clara e detalhada. Explique a complexidade de tempo/espaço (Big O) se relevante e o fluxo lógico do código. Responda em português brasileiro.";
+      systemPrompt += "\nSua missão é explicar o código fornecido de forma direta, técnica e detalhada.";
       prompt = `${contextStr}${text ? `Dúvida ou detalhes adicionais do usuário: ${text}\n\n` : ''}Por favor, explique detalhadamente o código acima.`;
     } else if (mode === '/fix') {
-      systemPrompt = "Você é o Kuben, um especialista sênior em depuração (debugging) de software. Sua missão é identificar erros de lógica, vulnerabilidades de segurança, problemas de concorrência, vazamentos de memória ou bugs sintáticos no código fornecido. Apresente o código corrigido e explique detalhadamente as correções aplicadas. Responda em português brasileiro.";
+      systemPrompt += "\nSua missão é atuar como um especialista sênior em depuração (debugging). Identifique e corrija os erros de forma cirúrgica e objetiva.";
       prompt = `${contextStr}${text ? `Problema específico apontado pelo usuário: ${text}\n\n` : ''}Analise o código acima, identifique problemas e forneça a versão corrigida e melhorada.`;
     } else if (mode === '/test') {
-      systemPrompt = "Você é o Kuben, um engenheiro especialista em QA e Testes Automatizados. Sua missão é gerar testes unitários robustos e de alta cobertura (edge cases, caminhos alternativos e erros) para o código fornecido. Use os frameworks mais populares da linguagem em questão. Responda em português brasileiro.";
+      systemPrompt += "\nSua missão é gerar testes unitários robustos e diretos para o código fornecido.";
       prompt = `${contextStr}${text ? `Especificações ou requisitos de teste do usuário: ${text}\n\n` : ''}Por favor, gere os testes unitários correspondentes para o código acima.`;
     } else if (mode === '/doc') {
-      systemPrompt = "Você é o Kuben, especialista em escrita técnica e documentação de código. Sua missão é enriquecer o código fornecido com comentários de documentação de alto padrão (ex: JSDoc para JS/TS, Docstrings PEP 257 para Python, godoc para Go). Garanta que os parâmetros, retornos de função e comportamentos complexos sejam documentados de forma clara e limpa. Retorne o código documentado. Responda em português brasileiro.";
+      systemPrompt += "\nSua missão é adicionar comentários de documentação de alto padrão sem modificar a lógica.";
       prompt = `${contextStr}${text ? `Diretrizes específicas de documentação do usuário: ${text}\n\n` : ''}Por favor, adicione comentários de documentação detalhados e formate o código acima.`;
+    } else if (mode === '/diagnose') {
+      systemPrompt += "\nSua missão é atuar como um especialista sênior em resolução de problemas, analisando os erros do LSP relatados e fornecendo a correção cirúrgica.";
+      
+      let diagnosticsStr = "Nenhum arquivo ativo para diagnosticar.";
+      if (editor) {
+         diagnosticsStr = DiagnosticsTool.getDiagnosticsForDocument(editor.document);
+      }
+      
+      prompt = `${contextStr}\nRELATÓRIO DO COMPILADOR/LSP:\n\`\`\`text\n${diagnosticsStr}\n\`\`\`\n\n${text ? `Comentário do desenvolvedor: ${text}\n\n` : ''}Por favor, explique o motivo do(s) erro(s) e gere o código corrigido.`;
     } else {
       prompt = `${contextStr}Pergunta do Desenvolvedor: ${text}`;
     }
@@ -168,11 +254,73 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     let reply = '';
     try {
+      this.history = ContextOptimizer.compressHistory(this.history, 5); // Otimiza a memória
+      
       for await (const chunk of this.client.generateChatStream(this.history)) {
         reply += chunk;
         this._view.webview.postMessage({ type: 'chunk', text: chunk });
       }
       this.history.push({ role: 'assistant', content: reply });
+
+      // --- Início do Loop ReAct ---
+      if (reply.includes('<tool_call>')) {
+        const toolCallStr = reply.split('<tool_call>')[1].replace('</tool_call>', '').trim();
+        try {
+          const toolData = JSON.parse(toolCallStr);
+          if (toolData.name === 'aplicar_modificacao') {
+            this._view.webview.postMessage({ type: 'chunk', text: '\n\n*[⚙️ Executando aplicar_modificacao...]*\n' });
+            
+            const { EditorTool } = require('../infrastructure/tools/editorTool');
+            const editor = vscode.window.activeTextEditor;
+            
+            if (editor) {
+              const success = await EditorTool.applyBlockEdit(editor.document, toolData.arguments.oldBlock, toolData.arguments.newBlock);
+              const toolResult = success 
+                ? "SUCESSO: O bloco foi substituído no editor." 
+                : "FALHA: O `oldBlock` não foi encontrado. Certifique-se de copiar exatamente como está no arquivo, incluindo indentação.";
+              
+              // Injeta o resultado da ferramenta de volta no histórico como se fosse o sistema/ambiente
+              this.history.push({ role: 'user', content: `[Resultado da Ferramenta]: ${toolResult}\nConclua a sua resposta ao usuário.` });
+              
+              let followUp = '';
+              for await (const chunk of this.client.generateChatStream(this.history)) {
+                followUp += chunk;
+                this._view.webview.postMessage({ type: 'chunk', text: chunk });
+              }
+              this.history.push({ role: 'assistant', content: followUp });
+            } else {
+              this._view.webview.postMessage({ type: 'chunk', text: '\n\n*[❌ Erro: Nenhum editor ativo]*\n' });
+            }
+          } else {
+            // Qualquer outra ferramenta é tratada como uma chamada MCP nativa (read_file, sequentialthinking, create_entities)
+            this._view.webview.postMessage({ type: 'chunk', text: `\n\n*[⚙️ Executando MCP: ${toolData.name}...]*\n` });
+            const result = await mcpManager.executeTool(toolData.name, toolData.arguments);
+            
+            let toolResultStr = '';
+            if (result.isError) {
+              toolResultStr = `Falha na ferramenta MCP: ${result.content[0].text}`;
+            } else {
+              // Limitar tamanho para não estourar contexto do 1.5B
+              const textContent = result.content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+              const safeText = textContent.length > 5000 ? textContent.substring(0, 5000) + '\n...[Truncado]' : textContent;
+              toolResultStr = `Resultado MCP:\n${safeText}`;
+            }
+
+            this.history.push({ role: 'user', content: `[Resultado da Ferramenta]: ${toolResultStr}\nResponda ao usuário com base no resultado ou continue usando ferramentas se precisar.` });
+            
+            let followUp = '';
+            for await (const chunk of this.client.generateChatStream(this.history)) {
+              followUp += chunk;
+              this._view.webview.postMessage({ type: 'chunk', text: chunk });
+            }
+            this.history.push({ role: 'assistant', content: followUp });
+          }
+        } catch (e) {
+          console.error('[Kuben] Erro no parsing da Tool:', e);
+          this._view.webview.postMessage({ type: 'chunk', text: '\n\n*[❌ Falha ao processar a ferramenta gerada pela IA]*\n' });
+        }
+      }
+      // --- Fim do Loop ReAct ---
       this._view.webview.postMessage({ type: 'done' });
     } catch (err: any) {
       this._view.webview.postMessage({ type: 'error', text: err.message || String(err) });
@@ -211,7 +359,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (this.history.length === 0) {
       this.history.push({
         role: 'system',
-        content: "Você é o Kuben, um assistente de IA extremamente especializado em programação. Ajude o usuário respondendo suas dúvidas de desenvolvimento. Forneça respostas diretas, estruturadas e em português brasileiro. Quando fornecer blocos de código, use o formato markdown apropriado com a linguagem indicada."
+        content: `Você é o Kuben, um motor de IA estritamente focado em código.
+REGRAS OBRIGATÓRIAS:
+<rules>
+1. Seja absolutamente direto. NUNCA use formalidades ou divagações (ex: "Aqui está o código...", "Claro!").
+2. Sempre use blocos de código em markdown (ex: \`\`\`javascript).
+3. Seja conciso e retorne APENAS a solução técnica solicitada.
+4. Para chamar ferramentas do sistema, use ESTRITAMENTE a sintaxe <tool_call>nome_ferramenta</tool_call>.
+</rules>`
       });
     }
 
@@ -219,6 +374,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     let reply = '';
     try {
+      this.history = ContextOptimizer.compressHistory(this.history, 5); // Otimiza a memória
+
       for await (const chunk of this.client.generateChatStream(this.history)) {
         reply += chunk;
         this._view.webview.postMessage({ type: 'chunk', text: chunk });
