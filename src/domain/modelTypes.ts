@@ -26,6 +26,7 @@ export interface IModelCapabilities {
   readonly recommendedNumPredictBlock: number; // para block completion (longo)
   readonly requiresRaw: boolean;            // raw:true para preservar tokens FIM
   readonly requiresStop: readonly string[]; // stop sequences adicionais
+  readonly preferredFormat: 'psm' | 'spm';  // PSM (Prefix-Suffix-Middle) ou SPM (Suffix-Prefix-Middle)
 }
 
 export interface IModelProfile {

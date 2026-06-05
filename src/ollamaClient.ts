@@ -96,10 +96,16 @@ export class OllamaClient {
       ...(options?.stop || [])
     ];
 
+    // Limpeza inteligente de contexto para modelos locais (maximizando velocidade e relevância)
+    const MAX_FIM_LENGTH = 3500;
+    const safePrefix = prefix.length > MAX_FIM_LENGTH ? prefix.slice(-MAX_FIM_LENGTH) : prefix;
+    const safeSuffix = suffix.length > MAX_FIM_LENGTH ? suffix.slice(0, MAX_FIM_LENGTH) : suffix;
+
     const isFimSupported = profile?.capabilities.supportsFim ?? true;
+    const isSpm = profile?.capabilities.preferredFormat === 'spm';
     const prompt = isFimSupported && profile
-      ? PromptFormatter.formatFim({ prefix, suffix }, profile.sentinels)
-      : PromptFormatter.formatChatFallback({ prefix, suffix });
+      ? PromptFormatter.formatFim({ prefix: safePrefix, suffix: safeSuffix, isSpmFormat: isSpm }, profile.sentinels)
+      : PromptFormatter.formatChatFallback({ prefix: safePrefix, suffix: safeSuffix });
 
     try {
       const isOllama = this.provider === 'ollama';
@@ -167,10 +173,16 @@ export class OllamaClient {
       ...(options?.stop || [])
     ];
 
+    // Limpeza inteligente de contexto para modelos locais (maximizando velocidade e relevância)
+    const MAX_FIM_LENGTH = 3500;
+    const safePrefix = prefix.length > MAX_FIM_LENGTH ? prefix.slice(-MAX_FIM_LENGTH) : prefix;
+    const safeSuffix = suffix.length > MAX_FIM_LENGTH ? suffix.slice(0, MAX_FIM_LENGTH) : suffix;
+
     const isFimSupported = profile?.capabilities.supportsFim ?? true;
+    const isSpm = profile?.capabilities.preferredFormat === 'spm';
     const prompt = isFimSupported && profile
-      ? PromptFormatter.formatFim({ prefix, suffix }, profile.sentinels)
-      : PromptFormatter.formatChatFallback({ prefix, suffix });
+      ? PromptFormatter.formatFim({ prefix: safePrefix, suffix: safeSuffix, isSpmFormat: isSpm }, profile.sentinels)
+      : PromptFormatter.formatChatFallback({ prefix: safePrefix, suffix: safeSuffix });
 
     try {
       const isOllama = this.provider === 'ollama';
@@ -267,7 +279,11 @@ export class OllamaClient {
           prompt: prompt,
           system: systemPrompt,
           stream: false,
-          options: { temperature: 0.1 }
+          options: { 
+            temperature: 0.1,
+            top_p: 0.85,
+            stop: ['</tool_call>']
+          }
         };
       } else {
         const messages = [];
@@ -277,6 +293,8 @@ export class OllamaClient {
           model: this.model,
           messages: messages,
           temperature: 0.1,
+          top_p: 0.85,
+          stop: ['</tool_call>'],
           stream: false
         };
       }
@@ -313,12 +331,18 @@ export class OllamaClient {
         model: modelToUse,
         messages: messages,
         stream: true,
-        options: { temperature: 0.5 }
+        options: { 
+          temperature: 0.1,
+          top_p: 0.85,
+          stop: ['</tool_call>']
+        }
       } : {
         model: modelToUse,
         messages: messages,
         stream: true,
-        temperature: 0.5
+        temperature: 0.1,
+        top_p: 0.85,
+        stop: ['</tool_call>']
       };
 
       const response = await fetch(url, {

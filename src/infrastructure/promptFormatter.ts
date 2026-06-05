@@ -12,10 +12,10 @@ export class PromptFormatter {
    */
   public static formatFim(payload: FimPayload, sentinels: IFimSentinels): string {
     if (payload.isSpmFormat) {
-      // SPM: Suffix-Prefix-Middle
-      return `${sentinels.prefix}${sentinels.suffix}${payload.suffix}${sentinels.prefix}${payload.prefix}${sentinels.middle}`;
+      // SPM: Prefix token, then Suffix token, then Suffix Text, then Middle token, then Prefix text.
+      return `${sentinels.prefix}${sentinels.suffix}${payload.suffix}${sentinels.middle}${payload.prefix}`;
     }
-    // PSM: Prefix-Suffix-Middle (padrão)
+    // PSM: Prefix token, then Prefix text, then Suffix token, then Suffix text, then Middle token.
     return `${sentinels.prefix}${payload.prefix}${sentinels.suffix}${payload.suffix}${sentinels.middle}`;
   }
 
